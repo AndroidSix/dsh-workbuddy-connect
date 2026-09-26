@@ -260,7 +260,7 @@ declare const FALLBACK_CN_APP_VERSION = "5.5.6";
 declare const CN_APP_VERSION_FILENAME = ".workbuddy-app-version.json";
 /** The resolved identity a chat request presents as. */
 interface ChatIdentity {
-  /** Desktop App version; drives both `WorkBuddy/<v>` product tokens. */
+  /** Desktop App version; drives the desktop UA and `X-IDE-Version`. */
   clientVersion: string;
   /** Bundled agent-CLI version; absent drops the `CLI/…` UA token. */
   cliVersion?: string;
