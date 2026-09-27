@@ -11,7 +11,7 @@ import {
   deriveProtectorKey,
 } from '../src/desktop-credential-protection.ts'
 import type { WorkBuddyWindowsDiscoveryTools } from '../src/desktop-credential-protection.ts'
-import { CN_VARIANT, AI_VARIANT } from '../src/variants.ts'
+import { CN_VARIANT, AI_VARIANT , electronProfileFor} from '../src/variants.ts'
 
 const SECRET = Buffer.alloc(32, 9).toString('base64')
 const PAYLOAD_TEXT = JSON.stringify({ version: 1, atRestSecretKey: SECRET })
@@ -68,7 +68,7 @@ function fakeWindowsTools(
 
 function provider(tools: WorkBuddyWindowsDiscoveryTools, defaultElectronPath = join(root, 'missing', 'WorkBuddy.exe')): WorkBuddyAtRestKeyProvider {
   return new WorkBuddyAtRestKeyProvider({
-    product: CN_VARIANT.electron,
+    product: electronProfileFor(CN_VARIANT),
     discovery: 'windows-workbuddy',
     platform: 'win32',
     defaultElectronPath,
@@ -88,7 +88,7 @@ describe('issue #59/#60 discovery routing', () => {
   it('routes Linux to the existing unavailable path without discovery', async () => {
     const calls: string[] = []
     const keyProvider = new WorkBuddyAtRestKeyProvider({
-      product: CN_VARIANT.electron,
+      product: electronProfileFor(CN_VARIANT),
       discovery: electronDiscoveryFor('linux'),
       platform: 'linux',
       windowsTools: fakeWindowsTools('', { calls }),
@@ -101,7 +101,7 @@ describe('issue #59/#60 discovery routing', () => {
 describe('issue #59/#60 the international app on Windows', () => {
   function aiProvider(tools: WorkBuddyWindowsDiscoveryTools): WorkBuddyAtRestKeyProvider {
     return new WorkBuddyAtRestKeyProvider({
-      product: AI_VARIANT.electron,
+      product: electronProfileFor(AI_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
       windowsTools: tools,
@@ -116,7 +116,7 @@ describe('issue #59/#60 the international app on Windows', () => {
     const cnDefault = join(root, 'Programs', 'WorkBuddy', 'WorkBuddy.exe')
     await mkdir(dirname(cnDefault), { recursive: true })
     await writeFile(cnDefault, '#!/bin/sh\n', { mode: 0o755 })
-    expect(defaultWorkBuddyElectronPath(AI_VARIANT.electron, 'win32')).toBeUndefined()
+    expect(defaultWorkBuddyElectronPath(electronProfileFor(AI_VARIANT), 'win32')).toBeUndefined()
     const ai = await windowsCandidate('WorkBuddyAI.exe')
     const keyProvider = aiProvider(fakeWindowsTools(registryOutput([
       { name: 'WorkBuddy AI 5.6.2', icon: `"${ai},0"` },
@@ -139,7 +139,7 @@ describe('issue #59/#60 the international app on Windows', () => {
     const spawn = async (path: string): Promise<string> =>
       JSON.stringify({ version: 1, atRestSecretKey: path === ai ? aiSecret : cnSecret })
     const aiProviderWithSpawn = new WorkBuddyAtRestKeyProvider({
-      product: AI_VARIANT.electron,
+      product: electronProfileFor(AI_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
       windowsTools: fakeWindowsTools(registryOutput([
@@ -151,7 +151,7 @@ describe('issue #59/#60 the international app on Windows', () => {
     await expect(aiProviderWithSpawn.protectorKeyFor([aiKeyId])).resolves.toEqual(aiKey)
     expect(aiProviderWithSpawn.helperPath()).toBe(ai)
     const cnProviderWithSpawn = new WorkBuddyAtRestKeyProvider({
-      product: CN_VARIANT.electron,
+      product: electronProfileFor(CN_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
       defaultElectronPath: join(root, 'missing', 'WorkBuddy.exe'),
@@ -179,12 +179,12 @@ describe('issue #59/#60 the international app on Windows', () => {
     await expect(viaDiscovery.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
     // The env var is read at construction, so the provider is built after the
     // stub lands.
-    vi.stubEnv(AI_VARIANT.electron.envVar, ai)
+    vi.stubEnv(electronProfileFor(AI_VARIANT).envVar, ai)
     const direct = aiProvider(fakeWindowsTools('', { fail: true }))
     expect(direct.helperPath()).toBe(ai)
   })
 
-  it('a broken CN record must not sink the AI search, and vice versa', async () => {
+  it('a broken CN record must not sink the AI search', async () => {
     const ai = await windowsCandidate('WorkBuddyAI.exe')
     // A CN entry whose DisplayIcon is malformed is the CN product's problem:
     // it is excluded by the AI pattern before the incompleteness judgement.
@@ -193,6 +193,18 @@ describe('issue #59/#60 the international app on Windows', () => {
     const goodAi = registryOutput([{ name: 'WorkBuddy AI 5.6.2', icon: `"${ai},0"` }])
       .replace('{TEST-0}', '{TEST-AI}')
     const keyProvider = aiProvider(fakeWindowsTools(`${goodAi}\r\n${brokenCn}`))
+    await expect(keyProvider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
+  })
+
+  it('a broken AI record must not sink the CN search', async () => {
+    const cn = await windowsCandidate('WorkBuddy.exe')
+    // Mirror of the case above: the malformed entry matches the AI pattern
+    // this time, and the CN discovery must exclude it as decisively not-ours.
+    const brokenAi = registryOutput([{ name: 'WorkBuddy AI 5.6.2', icon: '"unterminated/WorkBuddyAI.exe,0' }])
+      .replace('{TEST-0}', '{TEST-AI}')
+    const goodCn = registryOutput([{ name: 'WorkBuddy 5.6.2', icon: `"${cn},0"` }])
+      .replace('{TEST-0}', '{TEST-CN}')
+    const keyProvider = provider(fakeWindowsTools(`${goodCn}\r\n${brokenAi}`))
     await expect(keyProvider.protectorKeyFor([KEY_ID])).resolves.toEqual(KEY)
   })
 
@@ -228,7 +240,7 @@ describe('Windows default and registry discovery', () => {
     await writeFile(defaultPath, '#!/bin/sh\n', { mode: 0o755 })
     const calls: string[] = []
     const keyProvider = new WorkBuddyAtRestKeyProvider({
-      product: CN_VARIANT.electron,
+      product: electronProfileFor(CN_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
       windowsTools: fakeWindowsTools('', { calls, fail: true }),
@@ -243,7 +255,7 @@ describe('Windows default and registry discovery', () => {
     vi.stubEnv('LOCALAPPDATA', '')
     const calls: string[] = []
     const keyProvider = new WorkBuddyAtRestKeyProvider({
-      product: CN_VARIANT.electron,
+      product: electronProfileFor(CN_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
       windowsTools: fakeWindowsTools('', { calls }),
@@ -362,7 +374,7 @@ describe('Windows candidate identity and failure semantics', () => {
       },
     }
     const keyProvider = new WorkBuddyAtRestKeyProvider({
-      product: CN_VARIANT.electron,
+      product: electronProfileFor(CN_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
       defaultElectronPath: join(root, 'missing', 'WorkBuddy.exe'),
@@ -406,7 +418,7 @@ describe('Windows priority, cache, and explicit paths', () => {
     const tools = fakeWindowsTools(registryOutput([{ name: 'WorkBuddy', icon: `"${candidate},0"` }]), { calls })
     const optionProvider = new WorkBuddyAtRestKeyProvider({
       electronPath: join(root, 'missing-option.exe'),
-      product: CN_VARIANT.electron,
+      product: electronProfileFor(CN_VARIANT),
       discovery: 'windows-workbuddy',
       platform: 'win32',
       defaultElectronPath: candidate,

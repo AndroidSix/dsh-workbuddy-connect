@@ -30,8 +30,15 @@ export interface WorkBuddyVariant {
   region: WorkBuddyRegion
   /** Env var overriding the desktop auth-file location. */
   env: string
-  /** How this product's Electron helper is identified and located. */
-  electron: WorkBuddyElectronProduct
+  /**
+   * How this product's Electron helper is identified and located.
+   *
+   * Optional for source compatibility: `WorkBuddyVariant` is a public type and
+   * existing callers construct their own descriptors without it. Resolution
+   * falls back to {@link electronProfileFor}, keyed by variant id — an
+   * unknown id stays on the CN profile, the store's other legacy default.
+   */
+  electron?: WorkBuddyElectronProduct
   /** Basename of the desktop app's own auth file in the shared auth directory. */
   desktopFilename: string
   /** Basename of the plugin-owned credential copy under `$DSH_HOME`. */
@@ -157,12 +164,26 @@ export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
 ]
 
 /** The CN variant; the plugin's long-standing default and compatibility anchor. */
-export const CN_VARIANT: WorkBuddyVariant = WORKBUDDY_VARIANTS[0]!
+export const CN_VARIANT = WORKBUDDY_VARIANTS[0]! satisfies WorkBuddyVariant
 
 /** The international variant. */
-export const AI_VARIANT: WorkBuddyVariant = WORKBUDDY_VARIANTS[1]!
+export const AI_VARIANT = WORKBUDDY_VARIANTS[1]! satisfies WorkBuddyVariant
 
 /** Look up a variant by provider id. */
 export function variantFor(id: string): WorkBuddyVariant | undefined {
   return WORKBUDDY_VARIANTS.find(variant => variant.id === id)
+}
+
+/**
+ * The Electron profile a variant resolves with.
+ *
+ * Callers inside the plugin pass their known-complete variants; descriptors
+ * assembled outside (the type is public and predates the profile) fall back
+ * by variant id, so an id-less or unknown custom variant stays on the CN
+ * product — the same default the store's other legacy fields assume.
+ */
+export function electronProfileFor(variant: Pick<WorkBuddyVariant, 'id' | 'electron'> | undefined): WorkBuddyElectronProduct {
+  // Both shipped variants always carry their profile; the optional marker
+  // exists only for externally assembled descriptors, hence the assertion.
+  return variant?.electron ?? (variant?.id === AI_VARIANT.id ? AI_VARIANT : CN_VARIANT).electron!
 }

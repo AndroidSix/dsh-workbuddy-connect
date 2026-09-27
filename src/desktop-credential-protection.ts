@@ -30,6 +30,7 @@ import { accessSync, constants, readFileSync, realpathSync, statSync } from 'nod
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
+import { electronProfileFor } from './variants.ts'
 import type { WorkBuddyElectronProduct, WorkBuddyVariant } from './variants.ts'
 
 /** The four states a desktop auth document can be read as. */
@@ -350,9 +351,9 @@ export function electronDiscoveryFor(
  * plugin host and the CLI entry so the browser card and `doctor`/`status` can
  * never disagree about which binary a variant resolves.
  */
-export function atRestKeyProviderFor(variant: Pick<WorkBuddyVariant, 'electron'>): WorkBuddyAtRestKeyProvider {
+export function atRestKeyProviderFor(variant: Pick<WorkBuddyVariant, 'id' | 'electron'>): WorkBuddyAtRestKeyProvider {
   return new WorkBuddyAtRestKeyProvider({
-    product: variant.electron,
+    product: electronProfileFor(variant),
     discovery: electronDiscoveryFor(),
   })
 }
@@ -783,7 +784,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
       try {
         candidates = await this.tools.findApps(controller.signal)
       } catch {
-        throw discoveryIncomplete('the app search did not complete')
+        throw discoveryIncomplete(this.product.productName, 'the app search did not complete')
       }
       // Several Spotlight rows can name one bundle (path aliases, the
       // /System/Volumes/Data view). Identity + realpath collapse those into
@@ -856,7 +857,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
       // existence forbids claiming the rest are unique. This is the difference
       // between "we know there is exactly one" and "we only found one of the
       // ones we could read" (§3.4).
-      if (unresolved) throw discoveryIncomplete('some candidates could not be checked')
+      if (unresolved) throw discoveryIncomplete(this.product.productName, 'some candidates could not be checked')
       if (seen.size === 0) {
         throw new WorkBuddyElectronPathError(
           'electron-binary-not-found',
@@ -914,7 +915,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
         if (inspection === undefined) continue
         seen.set(inspection.identity, inspection.electronPath)
       }
-      if (unresolved) throw discoveryIncomplete('some registry entries or candidates could not be checked')
+      if (unresolved) throw discoveryIncomplete(this.product.productName, 'some registry entries or candidates could not be checked')
       if (seen.size > 1) {
         const listed = [...seen.values()].map(path => `  - ${path}`).join('\n')
         throw new WorkBuddyElectronPathError(
@@ -1137,10 +1138,10 @@ function isENOENT(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
 }
 
-function discoveryIncomplete(detail: string): WorkBuddyElectronPathError {
+function discoveryIncomplete(productName: string, detail: string): WorkBuddyElectronPathError {
   return new WorkBuddyElectronPathError(
     'electron-discovery-incomplete',
-    `the WorkBuddy application search did not finish (${detail});`
+    `the ${productName} application search did not finish (${detail});`
     + ' this is not proof that the app is missing',
   )
 }

@@ -619,8 +619,15 @@ interface WorkBuddyVariant {
   region: WorkBuddyRegion;
   /** Env var overriding the desktop auth-file location. */
   env: string;
-  /** How this product's Electron helper is identified and located. */
-  electron: WorkBuddyElectronProduct;
+  /**
+   * How this product's Electron helper is identified and located.
+   *
+   * Optional for source compatibility: `WorkBuddyVariant` is a public type and
+   * existing callers construct their own descriptors without it. Resolution
+   * falls back to {@link electronProfileFor}, keyed by variant id — an
+   * unknown id stays on the CN profile, the store's other legacy default.
+   */
+  electron?: WorkBuddyElectronProduct;
   /** Basename of the desktop app's own auth file in the shared auth directory. */
   desktopFilename: string;
   /** Basename of the plugin-owned credential copy under `$DSH_HOME`. */
