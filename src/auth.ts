@@ -25,7 +25,7 @@ import {
 } from './desktop-credential-protection.ts'
 import type { DesktopAuthClassification, DesktopAuthFormat } from './desktop-credential-protection.ts'
 import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
-import type { WorkBuddyVariant } from './variants.ts'
+import { CN_VARIANT, type WorkBuddyVariant } from './variants.ts'
 import type { WorkBuddyRefreshOutcome } from './upstream.ts'
 
 /** Normalized WorkBuddy credential, timestamps in epoch milliseconds. */
@@ -326,7 +326,10 @@ export class WorkBuddyCredentialStore {
     this.refresh = options.refresh
     this.refreshMarginMs = options.refreshMarginMs ?? 5 * 60 * 1000
     this.ownPath = options.ownPath ?? (options.variant ? join(resolveDshHome(), options.variant.ownFilename) : workbuddyOwnAuthPath())
-    this.keyProvider = options.keyProvider ?? new WorkBuddyAtRestKeyProvider()
+    // Legacy stores without a variant stay on the CN product the store's other
+    // defaults already assume (own-copy filename, auth env var).
+    this.keyProvider = options.keyProvider
+      ?? new WorkBuddyAtRestKeyProvider({ product: (options.variant ?? CN_VARIANT).electron })
     this.desktopPathOverride = options.desktopPath
   }
 

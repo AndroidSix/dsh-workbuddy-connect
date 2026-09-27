@@ -195,9 +195,9 @@ export type WorkBuddySignedOutReasonCode =
   | 'credential-region-mismatch'
   /** An encrypted credential exists but could not be opened (wrong key, GCM failure, helper crash). */
   | 'encrypted-credential-unreadable'
-  /** CN on a supported platform: discovery ran to completion and found no usable candidate. */
+  /** A product on a supported platform: discovery ran to completion and found no usable candidate. */
   | 'electron-binary-not-found'
-  /** CN on a supported platform: discovery found more than one distinct usable app. */
+  /** A product on a supported platform: discovery found more than one distinct usable app. */
   | 'electron-binary-ambiguous'
   /** No auto-discovery for this product/platform and no explicit path configured. */
   | 'electron-binary-unavailable'

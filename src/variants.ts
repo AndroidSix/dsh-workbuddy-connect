@@ -30,6 +30,8 @@ export interface WorkBuddyVariant {
   region: WorkBuddyRegion
   /** Env var overriding the desktop auth-file location. */
   env: string
+  /** How this product's Electron helper is identified and located. */
+  electron: WorkBuddyElectronProduct
   /** Basename of the desktop app's own auth file in the shared auth directory. */
   desktopFilename: string
   /** Basename of the plugin-owned credential copy under `$DSH_HOME`. */
@@ -59,6 +61,40 @@ export interface WorkBuddyVariant {
   probePath: string
 }
 
+/**
+ * How one product's Electron key helper is identified on each platform, and
+ * which env var names an explicit binary for it (issues #59/#60).
+ *
+ * The profile is the *only* place product identity enters helper resolution —
+ * never the discovery setting, which only says whether a platform may be
+ * searched at all: two products on the same platform differ by bundle id /
+ * registry name / exe basename, so a discovery that matches one can never
+ * legitimately execute the other's binary.
+ */
+export interface WorkBuddyElectronProduct {
+  /** Product name for helper diagnostics and error copy, e.g. `WorkBuddy AI`. */
+  productName: string
+  /** Env var naming an explicit Electron binary for this product alone. */
+  envVar: string
+  /** macOS identity and default install layout, verified per product. */
+  macOS: {
+    bundleId: string
+    defaultPath: string
+  }
+  /**
+   * Windows identity from the uninstall registry and the exe it names.
+   * `defaultPathSegments` exists only where the default install location has
+   * been measured (CN); the international app has only been seen in
+   * user-chosen locations, so it stays registry-only — an unverified default
+   * is a guess, and guessing is how the wrong app gets executed.
+   */
+  windows: {
+    displayNamePattern: RegExp
+    exeBasename: string
+    defaultPathSegments?: readonly string[]
+  }
+}
+
 /** CN WorkBuddy first: the existing provider keeps its id, paths, and copy. */
 export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
   {
@@ -67,6 +103,19 @@ export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
     appName: 'WorkBuddy',
     region: 'cn',
     env: 'WORKBUDDY_AUTH_FILE',
+    electron: {
+      productName: 'WorkBuddy',
+      envVar: 'WORKBUDDY_ELECTRON_BIN',
+      macOS: {
+        bundleId: 'com.tencent.workbuddy.mac',
+        defaultPath: '/Applications/WorkBuddy.app/Contents/MacOS/Electron',
+      },
+      windows: {
+        displayNamePattern: /^WorkBuddy(?:\s+\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?)?$/u,
+        exeBasename: 'workbuddy.exe',
+        defaultPathSegments: ['Programs', 'WorkBuddy', 'WorkBuddy.exe'],
+      },
+    },
     desktopFilename: 'workbuddy-desktop.info',
     ownFilename: '.workbuddy-auth.json',
     probeFilename: '.workbuddy-probe.json',
@@ -81,6 +130,22 @@ export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
     appName: 'WorkBuddy AI',
     region: 'global',
     env: 'WORKBUDDY_AI_AUTH_FILE',
+    electron: {
+      productName: 'WorkBuddy AI',
+      envVar: 'WORKBUDDY_AI_ELECTRON_BIN',
+      macOS: {
+        bundleId: 'com.workbuddy.workbuddy-ai',
+        defaultPath: '/Applications/WorkBuddy AI.app/Contents/MacOS/Electron',
+      },
+      windows: {
+        // Measured in #60: `WorkBuddy AI 5.6.2`. The CN pattern cannot match
+        // this value ("AI" is not a version) and this pattern cannot match
+        // `WorkBuddy 5.6.2` (missing the literal " AI"), so the two records
+        // never feed each other's discovery.
+        displayNamePattern: /^WorkBuddy AI(?:\s+\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?)?$/u,
+        exeBasename: 'workbuddyai.exe',
+      },
+    },
     desktopFilename: 'workbuddy-desktop-ai.info',
     ownFilename: '.workbuddy-ai-auth.json',
     probeFilename: '.workbuddy-ai-probe.json',

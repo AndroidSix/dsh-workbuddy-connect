@@ -1,11 +1,12 @@
 /**
  * WorkBuddy 5.6.x at-rest credential protection: classification, key
- * resolution, and field decryption for the desktop app's encrypted auth file.
+ * resolution, and field decryption for the desktop apps' encrypted auth files.
  *
- * Since WorkBuddy 5.6 the desktop app encrypts `auth.accessToken` and
- * `auth.refreshToken` at rest (`buildPolicy: "fields"`, on by default), so the
- * plugin reads `{$wbEncrypted:1, envelope}` wrappers instead of token strings
- * (issues #39/#40). Everything needed to open them lives on the same machine:
+ * Since WorkBuddy 5.6 both desktop apps (CN and international, which followed
+ * in 5.6.2) encrypt `auth.accessToken` and `auth.refreshToken` at rest
+ * (`buildPolicy: "fields"`, on by default), so the plugin reads
+ * `{$wbEncrypted:1, envelope}` wrappers instead of token strings (issues
+ * #39/#40, #59/#60). Everything needed to open them lives on the same machine:
  *
  * - the sealed payload (`{version:1, atRestSecretKey}`) comes from the
  *   WorkBuddy-modified Electron's private `workbuddyStorage` binding, reached
@@ -29,30 +30,35 @@ import { accessSync, constants, readFileSync, realpathSync, statSync } from 'nod
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
-import type { WorkBuddyVariant } from './variants.ts'
+import type { WorkBuddyElectronProduct, WorkBuddyVariant } from './variants.ts'
 
 /** The four states a desktop auth document can be read as. */
 export type DesktopAuthFormat = 'absent' | 'plaintext' | 'encrypted' | 'unrecognized'
 
-/** Env variable that overrides the WorkBuddy Electron binary used as the key helper. */
+/**
+ * Env variable naming an explicit Electron binary for the CN product. The
+ * international product has its own ({@link WorkBuddyElectronProduct.envVar}
+ * on each variant); a shared variable is a single point of failure across two
+ * independently installed apps (issue #60).
+ */
 export const WORKBUDDY_ELECTRON_BIN_ENV = 'WORKBUDDY_ELECTRON_BIN'
 
-/** Platform-default Electron binaries confirmed for the CN app (5.6.2). */
-const MACOS_ELECTRON_PATH = '/Applications/WorkBuddy.app/Contents/MacOS/Electron'
-
 /**
- * The Electron binary the helper would spawn on this platform, or `undefined`
- * where no default has been verified. Windows requires `LOCALAPPDATA` to be
- * present; platforms without a verified layout must set
- * {@link WORKBUDDY_ELECTRON_BIN_ENV} explicitly.
+ * The platform-default Electron binary for one product, or `undefined` where
+ * none is verified. macOS defaults come from each product's measured layout;
+ * the Windows default needs `LOCALAPPDATA`, and the international app has no
+ * verified default location at all — registry discovery only, never a guess.
  */
-export function defaultWorkBuddyElectronPath(platform: NodeJS.Platform = process.platform): string | undefined {
-  if (platform === 'darwin') return MACOS_ELECTRON_PATH
-  if (platform !== 'win32') return undefined
+export function defaultWorkBuddyElectronPath(
+  product: WorkBuddyElectronProduct,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  if (platform === 'darwin') return product.macOS.defaultPath
+  if (platform !== 'win32' || product.windows.defaultPathSegments === undefined) return undefined
   const localAppData = process.env.LOCALAPPDATA?.trim()
   return localAppData === undefined || localAppData === ''
     ? undefined
-    : join(localAppData, 'Programs', 'WorkBuddy', 'WorkBuddy.exe')
+    : join(localAppData, ...product.windows.defaultPathSegments)
 }
 
 /** One decrypted-openable envelope's decoded parts. */
@@ -318,26 +324,38 @@ export type WorkBuddyKeyPayloadSource = () => Promise<string>
  * Which automatic discovery, if any, this provider may run when no explicit
  * binary is configured.
  *
- * `none` is the safe default: a provider that has not been told which product
- * it serves must not reach for another product's app. The CN line selects a
- * platform-specific discovery only where that platform's app layout has been
- * verified; Global remains `none`.
+ * The value says which *platform* may be searched, never which product: two
+ * products on the same platform are told apart by the product profile
+ * ({@link WorkBuddyElectronProduct} — bundle id, registry name, exe basename),
+ * so a search for one can never execute the other's binary. `none` remains the
+ * safe default for platforms without a verified layout (Linux today).
  */
 export type WorkBuddyElectronDiscovery = 'none' | 'macos-workbuddy' | 'windows-workbuddy'
 
-/** Select discovery from product and platform at the composition root. */
+/**
+ * Select discovery by platform. Both products have verified layouts on macOS
+ * and Windows (the international app is registry-only there), so discovery no
+ * longer gates on region; Linux and others stay `none`.
+ */
 export function electronDiscoveryFor(
-  variant: Pick<WorkBuddyVariant, 'region'>,
   platform: NodeJS.Platform = process.platform,
 ): WorkBuddyElectronDiscovery {
-  if (variant.region !== 'cn') return 'none'
   if (platform === 'darwin') return 'macos-workbuddy'
   if (platform === 'win32') return 'windows-workbuddy'
   return 'none'
 }
 
-/** The CN app's bundle id; the only one this round resolves by discovery. */
-export const WORKBUDDY_CN_BUNDLE_ID = 'com.tencent.workbuddy.mac'
+/**
+ * The at-rest key provider one variant's store should use. Shared by the
+ * plugin host and the CLI entry so the browser card and `doctor`/`status` can
+ * never disagree about which binary a variant resolves.
+ */
+export function atRestKeyProviderFor(variant: Pick<WorkBuddyVariant, 'electron'>): WorkBuddyAtRestKeyProvider {
+  return new WorkBuddyAtRestKeyProvider({
+    product: variant.electron,
+    discovery: electronDiscoveryFor(),
+  })
+}
 
 /** Absolute tool paths: never resolved through PATH, which a user can change. */
 const MDFIND_BIN = '/usr/bin/mdfind'
@@ -349,7 +367,6 @@ const WINDOWS_REGISTRY_ROOTS = [
 ] as const
 const WINDOWS_REGISTRY_OUTPUT_MAX_BYTES = 1024 * 1024
 const WINDOWS_ELECTRON_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u
-const WINDOWS_WORKBUDDY_DISPLAY_NAME_PATTERN = /^WorkBuddy(?:\s+\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?)?$/u
 
 /** One discovery subprocess's own limits; see {@link WorkBuddyAtRestKeyProviderOptions}. */
 export const WORKBUDDY_DISCOVERY_STEP_TIMEOUT_MS = 3_000
@@ -376,7 +393,7 @@ interface DiscoveredApp {
 
 /** Seams the discovery flow runs through, so tests never spawn a process. */
 export interface WorkBuddyDiscoveryTools {
-  /** Candidate `.app` bundles for the CN bundle id, or a throw for an unusable tool. */
+  /** Candidate `.app` bundles for the product's bundle id, or a throw for an unusable tool. */
   findApps: (signal: AbortSignal) => Promise<readonly string[]>
   /**
    * `CFBundleIdentifier` of a bundle, or `undefined` when the tool could not
@@ -396,6 +413,15 @@ export interface WorkBuddyWindowsDiscoveryTools {
 
 /** Provider options. */
 export interface WorkBuddyAtRestKeyProviderOptions {
+  /**
+   * Which product's Electron this provider resolves. Required and the only
+   * source of product identity: it names the explicit-path env var, the bundle
+   * id / registry name / exe basename discovery must match, and the platform
+   * default. Without it the provider could not even decide which env var to
+   * read — the discovery setting alone cannot carry this (both products are
+   * `none` on Linux, yet each must read its own variable).
+   */
+  product: WorkBuddyElectronProduct
   /** Explicit Electron binary; overrides the platform default and env. */
   electronPath?: string
   /** Helper timeout in milliseconds; default 10s. */
@@ -446,8 +472,12 @@ export interface WorkBuddyAtRestKeyProviderOptions {
  * identity. Every failure that means "we could not tell" — a missing tool, a
  * timeout, an oversized answer — is raised as {@link DiscoveryIncompleteError}
  * so it can never be silently read as "no such app".
+ *
+ * `bundleId` is the product being searched for; the Spotlight query and the
+ * caller's identity comparison both use it, so the two can never disagree
+ * about which app they are looking for.
  */
-export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
+export function workBuddyDiscoveryTools(bundleId: string): WorkBuddyDiscoveryTools {
   const runTool = (bin: string, args: readonly string[], maxBytes: number, signal: AbortSignal): Promise<string> =>
     new Promise<string>((resolve, reject) => {
       if (signal.aborted) {
@@ -478,7 +508,7 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
     findApps: async signal => {
       const out = await runTool(
         MDFIND_BIN,
-        [`kMDItemCFBundleIdentifier == '${WORKBUDDY_CN_BUNDLE_ID}'`],
+        [`kMDItemCFBundleIdentifier == '${bundleId}'`],
         MDFIND_MAX_OUTPUT_BYTES,
         signal,
       )
@@ -582,6 +612,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
    * a different app.
    */
   private readonly explicitPath: string | undefined
+  private readonly product: WorkBuddyElectronProduct
   private readonly defaultPath: string | undefined
   private readonly discovery: WorkBuddyElectronDiscovery
   private readonly tools: WorkBuddyDiscoveryTools
@@ -600,8 +631,9 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
   private cache: ResolvedKey | undefined
   private inflight: Promise<ResolvedKey> | undefined
 
-  constructor(options: WorkBuddyAtRestKeyProviderOptions = {}) {
-    const fromEnv = process.env[WORKBUDDY_ELECTRON_BIN_ENV]?.trim()
+  constructor(options: WorkBuddyAtRestKeyProviderOptions) {
+    this.product = options.product
+    const fromEnv = process.env[options.product.envVar]?.trim()
     const envPath = fromEnv === undefined || fromEnv === '' ? undefined : fromEnv
     // Explicit sources are authoritative and mutually exclusive with
     // discovery: naming a binary means "use this one", so an unusable one is
@@ -612,9 +644,9 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
     this.defaultPath = this.discovery === 'none'
       ? undefined
       : options.defaultElectronPath === undefined
-        ? defaultWorkBuddyElectronPath(this.platform)
+        ? defaultWorkBuddyElectronPath(options.product, this.platform)
         : options.defaultElectronPath ?? undefined
-    this.tools = options.tools ?? workBuddyDiscoveryTools()
+    this.tools = options.tools ?? workBuddyDiscoveryTools(options.product.macOS.bundleId)
     this.windowsTools = options.windowsTools ?? workBuddyWindowsDiscoveryTools()
     this.discoveryBudgetMs = options.discoveryBudgetMs ?? WORKBUDDY_DISCOVERY_BUDGET_MS
     this.timeoutMs = options.timeoutMs ?? 10_000
@@ -697,19 +729,19 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
       if (!isExecutable(this.explicitPath)) {
         throw new WorkBuddyElectronPathError(
           'electron-path-invalid',
-          `the configured WorkBuddy Electron binary is not available at ${this.explicitPath};`
-          + ` check ${WORKBUDDY_ELECTRON_BIN_ENV} or unset it to let the plugin look for the app itself`,
+          `the configured ${this.product.productName} Electron binary is not available at ${this.explicitPath};`
+          + ` check ${this.product.envVar} or unset it to let the plugin look for the app itself`,
         )
       }
       return this.explicitPath
     }
     if (this.discovery === 'none') {
-      // Either the other product, or a platform with no verified layout. Both
-      // are "not configured", never "we searched and failed".
+      // A platform without a verified layout: "not configured", never "we
+      // searched and failed".
       throw new WorkBuddyElectronPathError(
         'electron-binary-unavailable',
-        `no WorkBuddy Electron binary is configured for this platform;`
-        + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the app's Electron binary`,
+        `no ${this.product.productName} Electron binary is configured for this platform;`
+        + ` set ${this.product.envVar} to the app's Electron binary`,
       )
     }
     // The default path is the ordinary case and costs one stat; discovery is
@@ -729,8 +761,8 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
   }
 
   /**
-   * Resolve the CN app through Spotlight, then prove each candidate's identity
-   * before it can be executed.
+   * Resolve this product's app through Spotlight, then prove each candidate's
+   * identity before it can be executed.
    *
    * The whole flow shares one budget: a hang in one candidate must not extend
    * the wait for the others, and running out of budget is reported as an
@@ -740,8 +772,8 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
     if (this.platform !== 'darwin') {
       throw new WorkBuddyElectronPathError(
         'electron-binary-unavailable',
-        `no WorkBuddy Electron binary is configured for this platform;`
-        + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the app's Electron binary`,
+        `no ${this.product.productName} Electron binary is configured for this platform;`
+        + ` set ${this.product.envVar} to the app's Electron binary`,
       )
     }
     const controller = new AbortController()
@@ -790,7 +822,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
           unresolved = true
           continue
         }
-        if (bundleIdentifier !== WORKBUDDY_CN_BUNDLE_ID) continue
+        if (bundleIdentifier !== this.product.macOS.bundleId) continue
         const electronPath = join(candidate, 'Contents', 'MacOS', 'Electron')
         if (!isExecutable(electronPath)) continue
         let identity: string
@@ -816,8 +848,8 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
           .join('\n')
         throw new WorkBuddyElectronPathError(
           'electron-binary-ambiguous',
-          `more than one WorkBuddy application was found, so none was chosen:\n${listed}\n`
-          + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the one to use`,
+          `more than one ${this.product.productName} application was found, so none was chosen:\n${listed}\n`
+          + ` set ${this.product.envVar} to the one to use`,
         )
       }
       // A candidate nobody could check might have been a second copy, so its
@@ -828,8 +860,9 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
       if (seen.size === 0) {
         throw new WorkBuddyElectronPathError(
           'electron-binary-not-found',
-          'no WorkBuddy application was found in the default location or the system index;'
-          + ' if WorkBuddy is installed elsewhere, it may not be indexed yet',
+          `no ${this.product.productName} application was found in the default location or the system index;`
+          + ' if it is installed elsewhere, it may not be indexed yet;'
+          + ` set ${this.product.envVar} to the app's Electron binary`,
         )
       }
       return [...seen.values()][0]!.electronPath
@@ -840,16 +873,17 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
   }
 
   /**
-   * Resolve the CN app through Windows uninstall records. Registry entries
-   * provide hints, not trust: every DisplayIcon candidate must still be a
-   * WorkBuddy Electron binary with the known Electron layout before execution.
+   * Resolve this product's app through Windows uninstall records. Registry
+   * entries provide hints, not trust: every DisplayIcon candidate must still
+   * be the product's Electron binary with the known Electron layout before
+   * execution.
    */
   private async discoverWindowsApp(): Promise<string> {
     if (this.platform !== 'win32') {
       throw new WorkBuddyElectronPathError(
         'electron-binary-unavailable',
-        `no WorkBuddy Electron binary is configured for this platform;`
-        + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the app's Electron binary`,
+        `no ${this.product.productName} Electron binary is configured for this platform;`
+        + ` set ${this.product.envVar} to the app's Electron binary`,
       )
     }
     const controller = new AbortController()
@@ -865,14 +899,14 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
           unresolved = true
           continue
         }
-        const parsed = parseWindowsRegistryOutput(output)
+        const parsed = parseWindowsRegistryOutput(output, this.product.windows.displayNamePattern)
         candidates.push(...parsed.candidates)
         unresolved ||= parsed.incomplete
       }
 
       const seen = new Map<string, string>()
       for (const candidate of new Set(candidates)) {
-        const inspection = inspectWindowsElectronCandidate(candidate, this.platform)
+        const inspection = inspectWindowsElectronCandidate(candidate, this.platform, this.product.windows.exeBasename)
         if (inspection === 'unresolved') {
           unresolved = true
           continue
@@ -885,14 +919,15 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
         const listed = [...seen.values()].map(path => `  - ${path}`).join('\n')
         throw new WorkBuddyElectronPathError(
           'electron-binary-ambiguous',
-          `more than one WorkBuddy application was found, so none was chosen:\n${listed}\n`
-          + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the one to use`,
+          `more than one ${this.product.productName} application was found, so none was chosen:\n${listed}\n`
+          + ` set ${this.product.envVar} to the one to use`,
         )
       }
       if (seen.size === 0) {
         throw new WorkBuddyElectronPathError(
           'electron-binary-not-found',
-          'no usable WorkBuddy Electron binary was found in the default location or Windows uninstall records',
+          `no usable ${this.product.productName} Electron binary was found in the default location or Windows uninstall records;`
+          + ` set ${this.product.envVar} to the app's Electron binary`,
         )
       }
       return [...seen.values()][0]!
@@ -949,8 +984,15 @@ function windowsRegistryKeyMissing(stderr: string): boolean {
     || /^错误[:：]\s*系统找不到指定的注册表项或值[。.]?$/u.test(detail)
 }
 
-/** Parse the value columns emitted by `reg query ... /s`. */
-function parseWindowsRegistryOutput(output: string): { candidates: string[], incomplete: boolean } {
+/**
+ * Parse the value columns emitted by `reg query ... /s`.
+ *
+ * Entries are filtered by the product's DisplayName pattern *before* the
+ * DisplayIcon is judged, so another product's records — however broken — are
+ * excluded as decisively not ours and can never mark this product's search
+ * incomplete.
+ */
+function parseWindowsRegistryOutput(output: string, displayNamePattern: RegExp): { candidates: string[], incomplete: boolean } {
   const entries = new Map<string, { displayName?: string, displayIcon?: string }>()
   let currentKey: string | undefined
   for (const line of output.split(/\r?\n/u)) {
@@ -973,7 +1015,7 @@ function parseWindowsRegistryOutput(output: string): { candidates: string[], inc
   let incomplete = false
   for (const entry of entries.values()) {
     if (entry.displayName === undefined) continue
-    if (!WINDOWS_WORKBUDDY_DISPLAY_NAME_PATTERN.test(entry.displayName.trim())) continue
+    if (!displayNamePattern.test(entry.displayName.trim())) continue
     const displayIcon = entry.displayIcon === undefined ? undefined : parseWindowsDisplayIcon(entry.displayIcon)
     if (displayIcon === undefined) incomplete = true
     else candidates.push(displayIcon)
@@ -1006,14 +1048,16 @@ interface WindowsCandidateInspection {
 }
 
 /**
- * Validate the known WorkBuddy Windows layout. `undefined` is a decidable
- * exclusion; `unresolved` is reserved for errors that prevent checking.
+ * Validate the known Windows layout for the product's exe. `undefined` is a
+ * decidable exclusion; `unresolved` is reserved for errors that prevent
+ * checking.
  */
 function inspectWindowsElectronCandidate(
   electronPath: string,
   platform: NodeJS.Platform,
+  exeBasename: string,
 ): WindowsCandidateInspection | 'unresolved' | undefined {
-  if (platform !== 'win32' || basename(electronPath).toLowerCase() !== 'workbuddy.exe') return undefined
+  if (platform !== 'win32' || basename(electronPath).toLowerCase() !== exeBasename) return undefined
   let binaryStat
   try {
     binaryStat = statSync(electronPath)

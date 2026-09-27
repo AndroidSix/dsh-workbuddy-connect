@@ -19,7 +19,7 @@ import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { WorkBuddyCredentialStore, type WorkBuddyCredential, type WorkBuddyStoreOptions } from './auth.ts'
-import { electronDiscoveryFor, WorkBuddyAtRestKeyProvider } from './desktop-credential-protection.ts'
+import { atRestKeyProviderFor, WorkBuddyAtRestKeyProvider } from './desktop-credential-protection.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from './catalog.ts'
 import { workbuddyCatalogPath, WorkBuddyCatalogStore } from './catalog-store.ts'
 import { WorkBuddyVisibilityStore, workbuddyVisibilityPath } from './visibility-store.ts'
@@ -629,22 +629,15 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lastAccounts = new Map<string, string>()
 
-  // One at-rest key provider per variant. The difference is the discovery
-  // setting, and it is deliberate: only the CN WorkBuddy install has been
-  // verified to hold the key its envelopes name. CN may discover only the
-  // platform layout verified for that platform; a Global (WorkBuddy AI)
-  // encrypted credential has never been seen live, so that provider runs at
-  // `discovery: 'none'` — no default path and no platform discovery, which is
-  // a deliberate narrowing from the shared provider it replaces: a Global unlock
-  // must not silently execute the *CN* app's Electron, and the provider cannot
-  // tell which variant is asking. An explicit WORKBUDDY_ELECTRON_BIN still
-  // works for Global. A keyId mismatch is still reported as a diagnosis rather
-  // than a wrong open, and the helper only runs if an encrypted credential is
-  // read.
-  const atRestKeysFor = (variant: WorkBuddyVariant): WorkBuddyAtRestKeyProvider =>
-    new WorkBuddyAtRestKeyProvider({
-      discovery: electronDiscoveryFor(variant),
-    })
+  // One at-rest key provider per variant, built by the shared helper the CLI
+  // entry uses too. Product identity (env var, bundle id, registry name, exe
+  // basename) lives on the variant's electron profile, so each provider can
+  // only ever resolve — and execute — its own product's Electron: the two apps
+  // currently seal credentials under the same at-rest key on a machine, but
+  // that coincidence is never relied on. Discovery is platform-gated (macOS
+  // and Windows for both products, Linux none); an explicit per-product env
+  // var stays authoritative and never falls back.
+  const atRestKeysFor = (variant: WorkBuddyVariant): WorkBuddyAtRestKeyProvider => atRestKeyProviderFor(variant)
   const runtimes = WORKBUDDY_VARIANTS.map(variant => createVariantRuntime(
     config,
     variant,
