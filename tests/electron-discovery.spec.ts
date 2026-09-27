@@ -639,19 +639,31 @@ describe('#59/#60 the international app on macOS', () => {
 })
 
 describe('#59/#60 the shared construction helper both entries use', () => {
-  it('gives each variant its product default and never the other one', async () => {
+  it('gives each variant its product default and never the other one', () => {
     const cn = atRestKeyProviderFor(CN_VARIANT)
     const ai = atRestKeyProviderFor(AI_VARIANT)
     if (process.platform === 'darwin') {
       expect(cn.helperPath()).toBe(CN_VARIANT.electron.macOS.defaultPath)
       expect(ai.helperPath()).toBe(AI_VARIANT.electron.macOS.defaultPath)
       expect(cn.helperPath()).not.toBe(ai.helperPath())
-    } else {
-      // On other platforms the helper only says "not configured yet"; the
-      // important half is that neither accidentally answers the other's default.
-      expect(cn.helperPath()).toBeUndefined()
-      expect(ai.helperPath()).toBeUndefined()
+      return
     }
+    if (process.platform === 'win32') {
+      // A default is a location to try, not a file that must exist, so a
+      // normal Windows environment answers with the CN install path.
+      const localAppData = process.env.LOCALAPPDATA?.trim()
+      if (localAppData === undefined || localAppData === '') {
+        expect(cn.helperPath()).toBeUndefined()
+      } else {
+        expect(cn.helperPath()).toBe(join(localAppData, 'Programs', 'WorkBuddy', 'WorkBuddy.exe'))
+      }
+      // The international app has no verified Windows default at all.
+      expect(ai.helperPath()).toBeUndefined()
+      return
+    }
+    // Platforms without a verified layout answer "not configured yet" for both.
+    expect(cn.helperPath()).toBeUndefined()
+    expect(ai.helperPath()).toBeUndefined()
   })
 })
 
