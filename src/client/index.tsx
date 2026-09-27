@@ -27,6 +27,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import { WorkBuddyProbeControl } from './WorkBuddyProbeControl.tsx'
+import { WorkBuddyUpdateOverlay } from './WorkBuddyUpdateNotice.tsx'
+import { WorkBuddyUpdateStore } from './update-store.ts'
+import { WORKBUDDY_CONNECT_VERSION } from '../version.ts'
 import { WorkBuddyConfigPage } from './WorkBuddyConfigPage.tsx'
 import { CARD_VARIANTS, WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
 import type { WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
@@ -38,6 +41,26 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     /** WorkBuddy plugin card copy. */
     'settings.workbuddy': WorkBuddySettingsKey
   }
+  interface SlotMap {
+    /**
+     * Compile-time mirror of the shell's overlay seat (declared at runtime by
+     * the ui-layout AppFrame, which this bundle does not depend on): a list
+     * slot the shell renders over the whole app, click-through until an entry
+     * opts into pointer events. Hosts without the seat simply never fire the
+     * inject below. If a future dependency ships the real declaration, drop
+     * this mirror in its favour.
+     */
+    'shell.overlay': {
+      kind: 'list'
+      scope: 'root'
+      owner: WorkBuddyShellOverlayOwnerProps
+    }
+  }
+}
+
+/** Owner share of the overlay seat: the frame supplies nothing to entries. */
+interface WorkBuddyShellOverlayOwnerProps {
+  children?: never
 }
 
 /** Stable browser-plugin name. */
@@ -135,6 +158,31 @@ export function apply(ctx: ClientContext): void {
     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-connect: settings copy')
   })
   const t = ctx.locale.bind(namespace) as WorkBuddyPluginCardInjected['t']
+  // The update reminder: one store for the whole bundle (the check compares
+  // this npm package's own version, so both provider cards share it). It
+  // refreshes once on mount through a 7-day localStorage cache and never
+  // blocks a contribution — a failed check simply renders nothing.
+  const updater = new WorkBuddyUpdateStore(WORKBUDDY_CONNECT_VERSION)
+  guardClientContribution('update reminder lifecycle', () => {
+    ctx.effect(() => {
+      void updater.refresh()
+      return () => { updater.dispose() }
+    }, 'dsh-workbuddy-connect: update checker')
+  })
+  // The floating seat. Hosts whose shell declares no `shell.overlay` seat
+  // never fire this callback — the reminder is simply absent there, the same
+  // degradation the two settings seams rely on.
+  guardClientContribution('update reminder overlay', () => {
+    ctx.slots.inject('shell.overlay', () => (
+      guardClientContribution('update reminder overlay', () => ctx.slots.register({
+        name: 'shell.overlay',
+        id: 'workbuddy-update',
+        order: 40,
+        locale: namespace,
+        inject: () => ({ t, updater }),
+      }, WorkBuddyUpdateOverlay)) ?? NOOP_DISPOSER
+    ))
+  })
   // SEAM ONE — DSH 0.1.5's settings Plugins tab. One card per variant: they
   // show different accounts, balances, and model sets, so a single merged
   // card could not say which account a number belongs to. The slot is

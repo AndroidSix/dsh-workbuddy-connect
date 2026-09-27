@@ -29,6 +29,7 @@ import { WorkBuddyProbeService } from './probe-service.ts'
 import { newestFirst, WorkBuddyProbeStore, workbuddyProbePath } from './probe-store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
+import { registerWorkBuddyUpdateRoute } from './update-route.ts'
 import { createProbeKey, registerWorkBuddyProbeRoute } from './probe-route.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
@@ -740,6 +741,9 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   ctx.inject(['webServer'], webCtx => {
+    // One update route for the whole bundle: it answers this npm package's
+    // public version metadata only, so it is per-plugin, not per-variant.
+    registerWorkBuddyUpdateRoute(webCtx, { currentVersion: WORKBUDDY_CONNECT_VERSION })
     for (const runtime of runtimes) {
       registerWorkBuddyStatusRoute(webCtx, {
         path: runtime.variant.statusPath,

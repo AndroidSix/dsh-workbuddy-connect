@@ -25,6 +25,15 @@ export const WORKBUDDY_PROBE_PATH = '/plugins/dsh-workbuddy-connect/probe'
 export const WORKBUDDY_AI_STATUS_PATH = '/plugins/dsh-workbuddy-connect/ai/status'
 export const WORKBUDDY_AI_PROBE_PATH = '/plugins/dsh-workbuddy-connect/ai/probe'
 
+/**
+ * Same-origin route backing the browser's update reminder.
+ *
+ * Read-only like the status route, so the same loopback Host/Origin gate
+ * applies; it answers public npm/GitHub metadata only and never token
+ * material.
+ */
+export const WORKBUDDY_UPDATE_PATH = '/plugins/dsh-workbuddy-connect/update'
+
 /** One model's recorded probe observation, as the card displays it. */
 export interface WorkBuddyWebProbeModel {
   id: string

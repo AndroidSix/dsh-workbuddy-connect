@@ -42,7 +42,7 @@ interface Harness {
 }
 
 /** Which slot registrations exist as declarations (callback fires at inject). */
-const ALL_SLOTS = ['settings.plugin.item', 'plugins.bundle.config', 'conversation.input.right']
+const ALL_SLOTS = ['settings.plugin.item', 'plugins.bundle.config', 'conversation.input.right', 'shell.overlay']
 
 /**
  * Build the fake host context. `failInject` throws from a `ctx.slots.inject`
@@ -107,6 +107,7 @@ function harness(options: {
 
 /** The registrations a fully successful `apply()` makes, in order. */
 const ALL_REGISTRATIONS: RecordedRegistration[] = [
+  { name: 'shell.overlay', id: 'workbuddy-update' },
   { name: 'settings.plugin.item', key: 'workbuddy' },
   { name: 'settings.plugin.item', key: 'workbuddy-ai' },
   { name: 'plugins.bundle.config', key: BUNDLE_NAME },
@@ -123,7 +124,7 @@ describe('client contribution isolation', () => {
     expect(() => apply(h.ctx)).not.toThrow()
     expect(h.registered).toEqual(ALL_REGISTRATIONS)
     expect(h.injectedSlots).toEqual([
-      'settings.plugin.item', 'settings.plugin.item', 'plugins.bundle.config', 'conversation.input.right',
+      'shell.overlay', 'settings.plugin.item', 'settings.plugin.item', 'plugins.bundle.config', 'conversation.input.right',
     ])
     expect(h.enteredModelDirectories()).toBe(true)
     expect(h.errors).toHaveLength(0)
@@ -138,6 +139,7 @@ describe('client contribution isolation', () => {
       : undefined })
     expect(() => apply(h.ctx)).not.toThrow()
     expect(h.registered).toEqual([
+      { name: 'shell.overlay', id: 'workbuddy-update' },
       { name: 'settings.plugin.item', key: 'workbuddy-ai' },
       { name: 'plugins.bundle.config', key: BUNDLE_NAME },
       { name: 'conversation.input.right', id: 'workbuddy-probe' },
@@ -153,6 +155,7 @@ describe('client contribution isolation', () => {
       : undefined })
     expect(() => apply(h.ctx)).not.toThrow()
     expect(h.registered).toEqual([
+      { name: 'shell.overlay', id: 'workbuddy-update' },
       { name: 'settings.plugin.item', key: 'workbuddy' },
       { name: 'settings.plugin.item', key: 'workbuddy-ai' },
       { name: 'conversation.input.right', id: 'workbuddy-probe' },
@@ -168,7 +171,7 @@ describe('client contribution isolation', () => {
       ? 'slot conversation.input.right is not declared'
       : undefined })
     expect(() => apply(h.ctx)).not.toThrow()
-    expect(h.registered).toEqual(ALL_REGISTRATIONS.slice(0, 3))
+    expect(h.registered).toEqual(ALL_REGISTRATIONS.slice(0, 4))
     expect(h.enteredModelDirectories()).toBe(true)
     expect(h.errors).toHaveLength(1)
     expect(String(h.errors[0])).toContain('conversation probe control')
@@ -191,6 +194,6 @@ describe('client contribution isolation', () => {
     expect(h.registered).toEqual([])
     expect(h.injectedSlots).toEqual([])
     expect(h.enteredModelDirectories()).toBe(true)
-    expect(h.errors).toHaveLength(4)
+    expect(h.errors).toHaveLength(5)
   })
 })
