@@ -301,6 +301,12 @@ const SESSION_DEAD_MARKERS: readonly string[] = ['Offline user session not found
 /** Classify an upstream failure from its HTTP status and body excerpt. */
 export function classifyUpstreamError(status: number, body: string): UpstreamErrorKind {
   if (status === 402) return 'hard_credit'
+  // A 401 is an auth failure whatever its body says: there is no business
+  // meaning for it on this upstream, and the session-dead markers below are
+  // only an additional signal (they also catch dead sessions answered as
+  // 403). Keeping every 401 in `session_dead` preserves the `(http 401)`
+  // status note the host needs to classify it as AUTH.
+  if (status === 401) return 'session_dead'
   const lower = body.toLowerCase()
   for (const marker of HARD_CREDIT_MARKERS) {
     if (lower.includes(marker.toLowerCase()) || body.includes(marker)) return 'hard_credit'
@@ -313,6 +319,36 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
   if (status >= 500) return 'server'
   if (status >= 400) return 'client'
   return 'client'
+}
+
+/**
+ * Extract a user-facing error message from an upstream JSON response body.
+ * Prefers WorkBuddy's localized `displayMsg.zh` / `displayMsg.en`, falling back to `msg`.
+ */
+export function extractDisplayErrorMessage(body: string): string | undefined {
+  const trimmed = body.trim()
+  if (!trimmed.startsWith('{')) return undefined
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+    const obj = parsed as Record<string, unknown>
+    const displayMsg = obj['displayMsg']
+    if (typeof displayMsg === 'object' && displayMsg !== null && !Array.isArray(displayMsg)) {
+      const localized = displayMsg as Record<string, unknown>
+      if (typeof localized['zh'] === 'string' && localized['zh'].trim() !== '') {
+        return localized['zh'].trim()
+      }
+      if (typeof localized['en'] === 'string' && localized['en'].trim() !== '') {
+        return localized['en'].trim()
+      }
+    }
+    if (typeof obj['msg'] === 'string' && obj['msg'].trim() !== '') {
+      return obj['msg'].trim()
+    }
+  } catch {
+    // Non-JSON bodies stay undefined
+  }
+  return undefined
 }
 
 /** Region for a login domain; an empty domain means CN (matching upstream tooling). */
