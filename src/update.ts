@@ -93,6 +93,18 @@ export function parseWorkBuddyVersion(raw: string): ParsedVersion | undefined {
   return [parsed.major, parsed.minor, parsed.patch].every(Number.isSafeInteger) ? parsed : undefined
 }
 
+/**
+ * One canonical spelling per SemVer value: leading `v` and build metadata
+ * fold away, so `v0.6.4`, `0.6.4`, and `0.6.4+build` dedupe as one release.
+ * Returns `undefined` for unparseable input; callers drop those first.
+ */
+export function canonicalWorkBuddyVersion(version: string): string | undefined {
+  const parsed = parseWorkBuddyVersion(version)
+  if (parsed === undefined) return undefined
+  return `${String(parsed.major)}.${String(parsed.minor)}.${String(parsed.patch)}`
+    + (parsed.prerelease.length === 0 ? '' : `-${parsed.prerelease.join('.')}`)
+}
+
 function compareIdentifiers(left: number | string, right: number | string): number {
   if (typeof left === 'number' && typeof right === 'number') return left < right ? -1 : left > right ? 1 : 0
   if (typeof left === 'number') return -1
@@ -217,8 +229,11 @@ function releasesInRange(currentVersion: string, latestVersion: string, value: u
     const version = parseWorkBuddyVersion(tag)
     if (version === undefined) continue
     if (compareWorkBuddyVersions(tag, currentVersion) <= 0 || compareWorkBuddyVersions(tag, latestVersion) > 0) continue
-    if (seen.has(tag)) continue
-    seen.add(tag)
+    // Dedupe by SemVer value, not spelling: `v0.6.4` and `0.6.4` are one
+    // release, and neither the count nor the rows may list it twice.
+    const canonical = canonicalWorkBuddyVersion(tag)
+    if (canonical === undefined || seen.has(canonical)) continue
+    seen.add(canonical)
     const name = cleanReleaseText(entry['name'], RELEASE_NAME_MAX_CHARS)
     const notes = cleanReleaseText(entry['body'], RELEASE_NOTES_MAX_CHARS)
     const publishedAt = cleanPublishedAt(entry['published_at'])
@@ -331,10 +346,13 @@ export function parseWorkBuddyUpdateResult(value: unknown): WorkBuddyUpdateResul
     const version = entry['version']
     if (typeof version !== 'string' || parseWorkBuddyVersion(version) === undefined) return undefined
     // The range is re-derived, not trusted: an out-of-range or duplicate
-    // entry means the document is not what this checker produced.
+    // entry means the document is not what this checker produced. Duplicates
+    // count by SemVer value — two spellings of one version are as rejectable
+    // as the same string twice.
     if (compareWorkBuddyVersions(version, currentVersion) <= 0 || compareWorkBuddyVersions(version, latestVersion) > 0) return undefined
-    if (seen.has(version)) return undefined
-    seen.add(version)
+    const canonical = canonicalWorkBuddyVersion(version)
+    if (canonical === undefined || seen.has(canonical)) return undefined
+    seen.add(canonical)
     const name = cleanReleaseText(entry['name'], RELEASE_NAME_MAX_CHARS)
     const notes = cleanReleaseText(entry['notes'], RELEASE_NOTES_MAX_CHARS)
     const publishedAt = cleanPublishedAt(entry['publishedAt'])

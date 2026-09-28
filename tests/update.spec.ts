@@ -123,6 +123,36 @@ describe('the GitHub enrichment', () => {
   })
 })
 
+describe('release dedupe by SemVer value', () => {
+  it('folds duplicate spellings of one version into a single release', async () => {
+    const fetchImpl = npmFetch(
+      { latest: '0.6.4' },
+      [
+        releaseEntry('v0.6.4'),
+        releaseEntry('0.6.4'),
+        releaseEntry('v0.6.3'),
+      ],
+    )
+    const result = await checkWorkBuddyUpdate({ currentVersion: '0.6.2', fetchImpl })
+    expect(result).toMatchObject({ status: 'update-available', versionsBehind: 2 })
+    if (result.status !== 'update-available') throw new Error('unreachable')
+    // First spelling wins; the second `0.6.4` folded away, and `v0.6.3` counts.
+    expect(result.releases.map(release => release.version)).toEqual(['v0.6.4', 'v0.6.3'])
+  })
+
+  it('rejects a route answer listing one version under two spellings', () => {
+    const forged = {
+      status: 'update-available',
+      currentVersion: '0.6.2',
+      latestVersion: '0.6.4',
+      releaseUrl: releasePageUrl('0.6.4'),
+      releases: [{ version: 'v0.6.4' }, { version: '0.6.4' }, { version: 'v0.6.3' }],
+      versionsBehind: 3,
+    }
+    expect(parseWorkBuddyUpdateResult(forged)).toBeUndefined()
+  })
+})
+
 describe('the browser-side re-validation', () => {
   const goodResult = {
     status: 'update-available',

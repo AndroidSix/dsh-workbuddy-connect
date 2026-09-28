@@ -139,7 +139,16 @@ export class WorkBuddyUpdateStore {
     const controller = new AbortController()
     this.request = controller
     const timer = setTimeout(() => { controller.abort(new Error('update route timed out')) }, ROUTE_TIMEOUT_MS)
-    this.setSnapshot({ status: 'checking', currentVersion: this.currentVersion, ...this.snapshot.dismissedNotice === undefined ? {} : { dismissedNotice: this.snapshot.dismissedNotice } })
+    // `latestVersion` survives the checking transition: the dismissal key is
+    // derived from it, and a recheck must not blank the target mid-flight —
+    // otherwise "don't remind me again" clicked while rechecking would write
+    // nothing and the panel would return with the very same version pair.
+    this.setSnapshot({
+      status: 'checking',
+      currentVersion: this.currentVersion,
+      ...this.snapshot.latestVersion === undefined ? {} : { latestVersion: this.snapshot.latestVersion },
+      ...this.snapshot.dismissedNotice === undefined ? {} : { dismissedNotice: this.snapshot.dismissedNotice },
+    })
     try {
       if (!force) {
         const cached = this.readCached()

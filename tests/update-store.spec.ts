@@ -119,6 +119,41 @@ describe('the update store cache', () => {
   })
 })
 
+describe('recheck keeps the dismissal target (review P2)', () => {
+  it('carries latestVersion through the checking transition and honours a mid-recheck dismissal', async () => {
+    let release!: (value: void) => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let calls = 0
+    const respond = () => new Response(JSON.stringify(UPDATE_AVAILABLE), { status: 200, headers: { 'content-type': 'application/json' } })
+    vi.stubGlobal('fetch', (async () => {
+      calls += 1
+      // Only the forced recheck hangs; the first, cache-filling refresh answers.
+      if (calls > 1) await gate
+      return respond()
+    }) as typeof fetch)
+    const store = new WorkBuddyUpdateStore('0.6.3')
+    await store.refresh()
+    expect(store.getSnapshot()).toMatchObject({ status: 'update-available', latestVersion: '0.6.4' })
+
+    // Force a recheck whose route hangs: the snapshot flips to checking, but
+    // the version pair behind the dismissal key must survive it.
+    const rechecking = store.refresh(true)
+    expect(store.getSnapshot().status).toBe('checking')
+    expect(store.getSnapshot().latestVersion).toBe('0.6.4')
+
+    // "Don't remind me again" clicked mid-recheck writes the pair.
+    store.dismiss('0.6.3:0.6.4')
+    expect(storage.getItem(WORKBUDDY_UPDATE_DISMISSED_KEY)).toBe('0.6.3:0.6.4')
+
+    // The recheck answers update-available again: the stored dismissal now
+    // covers it, so a panel keyed to this pair stays hidden.
+    release()
+    await rechecking
+    expect(store.getSnapshot()).toMatchObject({ status: 'update-available', dismissedNotice: '0.6.3:0.6.4' })
+    store.dispose()
+  })
+})
+
 describe('dismissal', () => {
   it('keys the dismissal to the version pair, so a newer release clears it', async () => {
     const store = new WorkBuddyUpdateStore('0.6.3')

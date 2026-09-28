@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import TestRenderer from 'react-test-renderer'
 import type { ReactTestRendererJSON } from 'react-test-renderer'
@@ -61,6 +61,45 @@ describe('the floating update seat', () => {
     expect(render({ ...baseSnapshot(), status: 'up-to-date', latestVersion: '0.6.1' })).toBeNull()
     expect(render({ ...baseSnapshot(), status: 'unavailable' })).toBeNull()
     expect(render({ ...baseSnapshot(), dismissedNotice: '0.6.1:0.6.4' })).toBeNull()
+  })
+
+  it('keeps the dismissal target alive across a recheck (review P2)', async () => {
+    // The reported flow: update-available -> click re-check -> checking ->
+    // click "don't remind me again" -> request completes. The checking
+    // snapshot must still carry latestVersion, or the dismiss button writes
+    // nothing and the same version pair comes right back.
+    let snapshot: WorkBuddyUpdateSnapshot = baseSnapshot()
+    const listeners = new Set<() => void>()
+    const dismiss = vi.fn()
+    const refresh = vi.fn(async () => {
+      const currentVersion = snapshot.currentVersion
+      const latestVersion = snapshot.latestVersion
+      snapshot = latestVersion === undefined
+        ? { status: 'checking', currentVersion }
+        : { status: 'checking', currentVersion, latestVersion }
+      for (const listener of listeners) listener()
+    })
+    const updater = {
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      getSnapshot: () => snapshot,
+      refresh,
+      dismiss,
+    }
+    const renderer = TestRenderer.create(createElement(WorkBuddyUpdateOverlay, { t, updater: updater as unknown as WorkBuddyUpdateStore }))
+    const root = renderer.root
+    // Click "re-check after upgrading".
+    const recheck = root.findAll(node => Array.isArray(node.children) && node.children.includes(en.recheckAfterUpgrade))[0]
+    if (recheck === undefined) throw new Error('recheck button not found')
+    await recheck.props.onClick()
+    expect(refresh).toHaveBeenCalledWith(true)
+    // The panel stays for the pending recheck, and the dismiss button must
+    // still name the previous version pair.
+    const dismissButton = root.findByProps({ 'aria-label': en.dismissUpdate })
+    dismissButton.props.onClick()
+    expect(dismiss).toHaveBeenCalledWith('0.6.1:0.6.4')
   })
 
   it('shows one collapsed row per in-range release, not the notes', () => {
