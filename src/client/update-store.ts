@@ -162,7 +162,11 @@ export class WorkBuddyUpdateStore {
         reason: 'registry-unavailable',
       })
     } catch {
-      if (!controller.signal.aborted && !this.disposed) {
+      // Only the dispose path cancels the request on purpose; every other
+      // abort — this refresh's own timeout included — and every transport
+      // error must land in `unavailable` (which schedules the in-page retry),
+      // or the snapshot would sit in `checking` forever.
+      if (!this.disposed) {
         this.acceptResult({ status: 'unavailable', currentVersion: this.currentVersion, reason: 'registry-unavailable' })
       }
     } finally {

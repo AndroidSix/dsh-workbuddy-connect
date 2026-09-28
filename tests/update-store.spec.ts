@@ -135,6 +135,28 @@ describe('dismissal', () => {
   })
 })
 
+describe('refresh timeouts', () => {
+  it('lands in unavailable after the route timeout, then retries in-page', async () => {
+    // A route that never answers: only the refresh's own 30s abort ends the
+    // request, and that abort must count as a failure — not silently vanish
+    // and leave the snapshot stuck on `checking`.
+    vi.stubGlobal('fetch', ((_input: string | URL, init?: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')), { once: true })
+    })) as typeof fetch)
+    const store = new WorkBuddyUpdateStore('0.6.3')
+    const pending = store.refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.getSnapshot().status).toBe('checking')
+    await vi.advanceTimersByTimeAsync(30_001)
+    await pending
+    expect(store.getSnapshot()).toMatchObject({ status: 'unavailable' })
+    // The in-page retry is scheduled like any other failure.
+    await vi.advanceTimersByTimeAsync(WORKBUDDY_UPDATE_RECHECK_MS)
+    expect(store.getSnapshot().status).toBe('checking')
+    store.dispose()
+  })
+})
+
 describe('route transport', () => {
   it('degrades a non-OK or unparseable route answer to unavailable', async () => {
     vi.stubGlobal('fetch', (async () => new Response('nope', { status: 500 })) as typeof fetch)

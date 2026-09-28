@@ -36,6 +36,13 @@ const overlayStyle: CSSProperties = {
   right: 20,
   zIndex: 30,
   width: 'min(440px, calc(100vw - 40px))',
+  // The shell.overlay seat is click-through by contract; an entry must opt
+  // back into pointer events or none of its buttons work.
+  pointerEvents: 'auto',
+  // The panel is bottom-anchored and the release list can be long: cap it at
+  // the viewport and let the whole panel scroll rather than grow past the top.
+  maxHeight: 'calc(100vh - 32px)',
+  overflowY: 'auto',
   boxSizing: 'border-box',
   boxShadow: '0 8px 28px rgba(0, 0, 0, 0.16)',
 }
