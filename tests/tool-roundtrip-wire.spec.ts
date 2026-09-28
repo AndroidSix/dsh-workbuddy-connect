@@ -55,23 +55,45 @@ async function wireBody(messages: unknown[]): Promise<WireMessage[]> {
   return (body?.['messages'] ?? []) as WireMessage[]
 }
 
-/** A Harness assistant message carrying one tool call per id given. */
-function assistantToolCalls(ids: readonly { id: string, name: string }[]): Record<string, unknown> {
+/** The adapter-private replay envelope dsh-llm-pi-ai validates (version 2). */
+function replayEnvelope(options: { provider?: string, kind?: string } = {}): unknown {
   return {
-    role: 'assistant',
-    content: ids.map(({ id, name }) => ({ type: 'tool-call', id, name, arguments: JSON.stringify({ command: 'echo hi' }) })),
-    // No replay state: the provider-neutral conversion path, which is what a
-    // cross-provider history (the #57 reporter switched providers) exercises.
-    source: { kind: 'model', provider: WORKBUDDY_PROVIDER, model: MODEL },
+    response: {
+      kind: options.kind ?? 'pi-ai',
+      version: 2,
+      api: 'openai-completions',
+      provider: options.provider ?? WORKBUDDY_PROVIDER,
+      model: MODEL,
+      stopReason: 'toolUse',
+    },
+    blocks: [{ type: 'tool-call' }],
   }
 }
 
-/** A Harness user message carrying only tool-result blocks. */
-function userToolResults(results: readonly { id: string, text: string, name?: string }[]): Record<string, unknown> {
+/** A Harness assistant message carrying one tool call per id given. */
+function assistantToolCalls(
+  ids: readonly { id: string, name: string }[],
+  source: Record<string, unknown> = { kind: 'model', provider: WORKBUDDY_PROVIDER, model: MODEL },
+): Record<string, unknown> {
+  return {
+    role: 'assistant',
+    content: ids.map(({ id, name }) => ({ type: 'tool-call', id, name, arguments: JSON.stringify({ command: 'echo hi' }) })),
+    // Without replayState this is the provider-neutral conversion path —
+    // what a cross-provider history exercises; with one, the same-model
+    // replay path a normal #57 conversation takes.
+    source,
+  }
+}
+
+/**
+ * One Harness tool-result message, in the 0.1.5 host contract: a user-role
+ * message whose source is the tool seat, one result block per message.
+ */
+function toolResultMessage(id: string, text: string): Record<string, unknown> {
   return {
     role: 'user',
-    content: results.map(({ id, text }) => ({ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text }], isError: false })),
-    source: { kind: 'user' },
+    content: [{ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text }], isError: false }],
+    source: { kind: 'tool', callId: id },
   }
 }
 
@@ -82,7 +104,7 @@ describe('#57 tool results reach the wire intact', () => {
     const wire = await wireBody([
       { role: 'user', content: [{ type: 'text', text: 'run echo hi' }], source: { kind: 'user' } },
       assistantToolCalls([{ id: 'call_1', name: 'shell' }]),
-      userToolResults([{ id: 'call_1', text: 'hi' }]),
+      toolResultMessage('call_1', 'hi'),
     ])
     const toolWire = wire.find(message => message.role === 'tool')
     expect(toolWire).toMatchObject({ tool_call_id: 'call_1', content: 'hi' })
@@ -98,10 +120,8 @@ describe('#57 tool results reach the wire intact', () => {
         { id: 'call_a', name: 'shell' },
         { id: 'call_b', name: 'read' },
       ]),
-      userToolResults([
-        { id: 'call_a', text: 'hi' },
-        { id: 'call_b', text: 'file-body' },
-      ]),
+      toolResultMessage('call_a', 'hi'),
+      toolResultMessage('call_b', 'file-body'),
     ])
     const toolWire = wire.filter(message => message.role === 'tool')
     expect(toolWire).toHaveLength(2)
@@ -114,9 +134,9 @@ describe('#57 tool results reach the wire intact', () => {
     const wire = await wireBody([
       { role: 'user', content: [{ type: 'text', text: 'run twice' }], source: { kind: 'user' } },
       assistantToolCalls([{ id: 'call_round1', name: 'shell' }]),
-      userToolResults([{ id: 'call_round1', text: 'first-output' }]),
+      toolResultMessage('call_round1', 'first-output'),
       assistantToolCalls([{ id: 'call_round2', name: 'shell' }]),
-      userToolResults([{ id: 'call_round2', text: 'second-output' }]),
+      toolResultMessage('call_round2', 'second-output'),
     ])
     const toolWire = wire.filter(message => message.role === 'tool')
     expect(toolWire).toHaveLength(2)
@@ -130,7 +150,7 @@ describe('#57 tool results reach the wire intact', () => {
     const wire = await wireBody([
       { role: 'user', content: [{ type: 'text', text: 'run echo hi' }], source: { kind: 'user' } },
       assistantToolCalls([{ id: odd, name: 'shell' }]),
-      userToolResults([{ id: odd, text: 'hi' }]),
+      toolResultMessage(odd, 'hi'),
     ])
     const toolWire = wire.find(message => message.role === 'tool')
     const assistantWire = wire.find(message => message.role === 'assistant')
@@ -153,10 +173,48 @@ describe('#57 tool results reach the wire intact', () => {
         content: [{ type: 'tool-call', id: 'call_foreign', name: 'shell', arguments: JSON.stringify({ command: 'echo hi' }) }],
         source: { kind: 'model', provider: 'deepseek-official', model: 'deepseek-flash' },
       },
-      userToolResults([{ id: 'call_foreign', text: 'hi' }]),
+      toolResultMessage('call_foreign', 'hi'),
     ])
     const toolWire = wire.find(message => message.role === 'tool')
     expect(toolWire).toMatchObject({ tool_call_id: 'call_foreign', content: 'hi' })
+    expect(JSON.stringify(wire)).not.toContain('No result provided')
+  })
+
+  it('pairs results on the same-model replay path', async () => {
+    // The normal #57 conversation: the assistant was produced by this very
+    // provider, so the host stored a replay envelope and the conversion takes
+    // the replayedAssistant path instead of the provider-neutral one.
+    const wire = await wireBody([
+      { role: 'user', content: [{ type: 'text', text: 'run echo hi' }], source: { kind: 'user' } },
+      assistantToolCalls([{ id: 'call_replay', name: 'shell' }], {
+        kind: 'model',
+        provider: WORKBUDDY_PROVIDER,
+        model: MODEL,
+        replayState: replayEnvelope(),
+      }),
+      toolResultMessage('call_replay', 'hi'),
+    ])
+    const toolWire = wire.find(message => message.role === 'tool')
+    expect(toolWire).toMatchObject({ tool_call_id: 'call_replay', content: 'hi' })
+    expect(JSON.stringify(wire)).not.toContain('No result provided')
+  })
+
+  it('still pairs results when a malformed replay state degrades to the neutral path', async () => {
+    // A replay envelope this build cannot use (another adapter's kind) must
+    // degrade that one message to provider-neutral conversion — never break
+    // the id pairing beside it.
+    const wire = await wireBody([
+      { role: 'user', content: [{ type: 'text', text: 'run echo hi' }], source: { kind: 'user' } },
+      assistantToolCalls([{ id: 'call_degraded', name: 'shell' }], {
+        kind: 'model',
+        provider: WORKBUDDY_PROVIDER,
+        model: MODEL,
+        replayState: replayEnvelope({ kind: 'someone-else' }),
+      }),
+      toolResultMessage('call_degraded', 'hi'),
+    ])
+    const toolWire = wire.find(message => message.role === 'tool')
+    expect(toolWire).toMatchObject({ tool_call_id: 'call_degraded', content: 'hi' })
     expect(JSON.stringify(wire)).not.toContain('No result provided')
   })
 
