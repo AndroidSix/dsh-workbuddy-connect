@@ -154,6 +154,40 @@ describe('recheck keeps the dismissal target (review P2)', () => {
   })
 })
 
+describe('a failed recheck keeps the dismissal target (review follow-up)', () => {
+  it('carries the version pair into unavailable state and honours a dismissal made there', async () => {
+    let fail = false
+    const respond = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    vi.stubGlobal('fetch', (async () => fail
+      ? new Response('nope', { status: 500 })
+      : respond(UPDATE_AVAILABLE)) as typeof fetch)
+    const store = new WorkBuddyUpdateStore('0.6.3')
+    await store.refresh()
+    expect(store.getSnapshot()).toMatchObject({ status: 'update-available', latestVersion: '0.6.4' })
+
+    // The recheck fails: the panel stays (pending recheck), and the version
+    // pair behind the dismissal key must survive the failure state too.
+    fail = true
+    await store.refresh(true)
+    expect(store.getSnapshot()).toMatchObject({ status: 'unavailable' })
+    expect(store.getSnapshot().latestVersion).toBe('0.6.4')
+
+    // "Don't remind me again" clicked during the failure writes the pair.
+    store.dismiss('0.6.3:0.6.4')
+    expect(storage.getItem(WORKBUDDY_UPDATE_DISMISSED_KEY)).toBe('0.6.3:0.6.4')
+
+    // The in-page retry succeeds with the same pair: the stored dismissal
+    // now covers it, so a panel keyed to this pair stays hidden.
+    fail = false
+    await vi.advanceTimersByTimeAsync(WORKBUDDY_UPDATE_RECHECK_MS)
+    expect(store.getSnapshot()).toMatchObject({ status: 'update-available', dismissedNotice: '0.6.3:0.6.4' })
+    // And the failure never cached its shape of the answer.
+    const cached = JSON.parse(String(storage.getItem(WORKBUDDY_UPDATE_CACHE_KEY))) as { result: { status: string } }
+    expect(cached.result.status).toBe('update-available')
+    store.dispose()
+  })
+})
+
 describe('dismissal', () => {
   it('keys the dismissal to the version pair, so a newer release clears it', async () => {
     const store = new WorkBuddyUpdateStore('0.6.3')

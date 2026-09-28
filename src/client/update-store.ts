@@ -125,7 +125,16 @@ export class WorkBuddyUpdateStore {
     if (this.disposed) return
     const checkedAt = Date.now()
     this.writeCached(result, checkedAt)
-    this.setSnapshot({ ...resultSnapshot(result, this.dismissedNotice()), checkedAt })
+    const next = resultSnapshot(result, this.dismissedNotice())
+    // A failed recheck must not erase the version pair the panel is showing:
+    // "don't remind me again" clicked during the failure still dismisses
+    // that pair, and the in-page retry answering update-available again
+    // stays covered by the stored dismissal. The pair is never cached with
+    // the failure, so a later mount without an answer starts clean.
+    if (result.status === 'unavailable' && this.snapshot.latestVersion !== undefined) {
+      next.latestVersion = this.snapshot.latestVersion
+    }
+    this.setSnapshot({ ...next, checkedAt })
     if (result.status === 'unavailable') {
       this.recheckTimer = setTimeout(() => { void this.refresh(true) }, WORKBUDDY_UPDATE_RECHECK_MS)
     }
