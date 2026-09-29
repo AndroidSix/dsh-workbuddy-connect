@@ -1,24 +1,26 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
-import SettingsProvider from '@deepseek-ai/dsh-settings'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as WorkBuddy from '../src/index.ts'
+import { LegacySettingsService } from './helpers/legacy-settings.ts'
 
-class MemorySettings extends SettingsProvider {
-  readonly writable = true
-  private storedDocument: Record<string, unknown> = {}
-
-  protected load(): Promise<Record<string, unknown>> {
-    return Promise.resolve(structuredClone(this.storedDocument))
-  }
-
-  protected persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
-    this.storedDocument[ns] = structuredClone(section)
-    return Promise.resolve()
+/**
+ * In-memory legacy settings: the 0.1.5/0.1.6 section API this plugin drives.
+ *
+ * DSH 0.2.0 replaced the real settings service with a Config-derived forms
+ * facade, so subclassing it — as these specs once did — would exercise a
+ * service this plugin does not use at all.
+ */
+class MemorySettings extends LegacySettingsService {
+  constructor() {
+    super({
+      read: () => ({}),
+      persist: () => Promise.resolve(),
+    })
   }
 }
 
@@ -67,22 +69,36 @@ describe('WorkBuddy Host settings integration', () => {
     vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
     vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
-    class FileSettings extends SettingsProvider {
-      readonly writable = true
-      protected async load(): Promise<Record<string, unknown>> {
-        return JSON.parse(await readFile(settingsFile, 'utf8'))
-      }
-      protected async persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
-        const document = await this.load()
-        document[ns] = section
-        await writeFile(settingsFile, JSON.stringify(document))
+    /**
+     * A file-backed legacy settings service: the preference has to survive a
+     * full context dispose and re-boot, so the sections' document is written
+     * out and read back through a temp file.
+     */
+    class FileSettings extends LegacySettingsService {
+      constructor() {
+        super({
+          read: () => {
+            // Read synchronously: installation is synchronous, and a stored
+            // preference has to be in place before the plugin reads the
+            // section's value source.
+            try {
+              return JSON.parse(readFileSync(settingsFile, 'utf8')) as Record<string, Record<string, unknown>>
+            } catch {
+              return {}
+            }
+          },
+          persist: async document => { await writeFile(settingsFile, JSON.stringify(document)) },
+        })
       }
     }
+    /** The settings service the last boot installed its sections into. */
+    let settings: FileSettings | undefined
     const boot = async (): Promise<Context> => {
       const ctx = new Context()
       context = ctx
       await ctx.plugin(LlmRuntime)
-      await ctx.plugin(FileSettings)
+      settings = new FileSettings()
+      ctx.provide('settings', settings)
       await ctx.plugin(WorkBuddy, {})
       await vi.waitFor(async () => {
         expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
@@ -105,7 +121,10 @@ describe('WorkBuddy Host settings integration', () => {
     })
     await ctx.fiber.dispose()
     ctx = await boot()
-    expect(ctx.settings.get('workbuddy-ai')).toMatchObject({ useMaximumContextWindow: false })
+    // The stored preference, read off this boot's own settings service (the
+    // 0.2.0 forms facade has no per-namespace `get`, so the assertion goes
+    // through the double that actually installed the section).
+    expect(settings?.get(WorkBuddy.WORKBUDDY_AI_SETTINGS_NS)).toMatchObject({ useMaximumContextWindow: false })
     expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
   })
 
@@ -128,7 +147,7 @@ describe('WorkBuddy Host settings integration', () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    await ctx.plugin(MemorySettings)
+    ctx.provide('settings', new MemorySettings())
     await ctx.plugin(WorkBuddy, {})
 
     // Registration rides on the loopback shim's listening event.
@@ -217,7 +236,7 @@ describe('WorkBuddy Host settings integration', () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    await ctx.plugin(MemorySettings)
+    ctx.provide('settings', new MemorySettings())
     await ctx.plugin(WorkBuddy, {})
 
     await vi.waitFor(() => {
@@ -250,11 +269,19 @@ describe('WorkBuddy Host settings integration', () => {
     expect(served).toContain(WorkBuddy.WORKBUDDY_AI_SETTINGS_NS)
 
     // Each section owns only its own fields, so one card's form cannot edit the
-    // other's path. `describe()` reports the schema as schemastery's ref graph;
-    // the root object's `dict` is the field map.
+    // other's path. `describe()` reports a schemastery object schema; its
+    // field map is `dict` — directly on the schema since schemastery 3.18.4,
+    // where the older releases kept the root object in a `refs` graph keyed by
+    // `uid`. Both spellings are read so this assertion holds across them.
     const fieldsOf = (ns: string): string[] => {
       const descriptor = ctx.settings.describe().find(entry => entry.ns === ns)
-      const root = (descriptor?.schema as { refs?: Record<string, { dict?: Record<string, unknown> }>, uid?: string } | undefined)?.refs?.[String((descriptor?.schema as { uid?: number } | undefined)?.uid)]
+      const schema = descriptor?.schema as {
+        dict?: Record<string, unknown>
+        refs?: Record<string, { dict?: Record<string, unknown> }>
+        uid?: number | string
+      } | undefined
+      if (schema?.dict !== undefined) return Object.keys(schema.dict)
+      const root = schema?.refs?.[String(schema.uid)]
       return Object.keys(root?.dict ?? {})
     }
     expect(fieldsOf('workbuddy')).toContain('authFile')
@@ -330,7 +357,7 @@ describe('WorkBuddy Host settings integration', () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    await ctx.plugin(MemorySettings)
+    ctx.provide('settings', new MemorySettings())
     await ctx.plugin(WorkBuddy, {})
 
     await vi.waitFor(() => {
@@ -367,7 +394,7 @@ describe('WorkBuddy Host settings integration', () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    await ctx.plugin(MemorySettings)
+    ctx.provide('settings', new MemorySettings())
     await ctx.plugin(WorkBuddy, {})
 
     const models = await (async () => {
@@ -398,7 +425,7 @@ describe('WorkBuddy Host settings integration', () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    await ctx.plugin(MemorySettings)
+    ctx.provide('settings', new MemorySettings())
     // Simulate the 0.1.7 settings service: the 0.1.2-era section API is gone.
     // (`installSection` is a prototype method on this provider, so a plain
     // assignment — not `delete` — is what hides it.)
@@ -467,7 +494,7 @@ describe('WorkBuddy Host settings integration', () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    await ctx.plugin(MemorySettings)
+    ctx.provide('settings', new MemorySettings())
     ctx.provide('attachments', attachmentStore as never)
     await ctx.plugin(WorkBuddy, {})
     await vi.waitFor(() => {
@@ -580,7 +607,7 @@ describe('WorkBuddy Host settings integration', () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
-    await ctx.plugin(MemorySettings)
+    ctx.provide('settings', new MemorySettings())
     ctx.provide('attachments', attachmentStore as never)
     // The fs service is present — it just cannot map this host path.
     ctx.provide('fs', { processPathFromHostPath: () => undefined } as never)
