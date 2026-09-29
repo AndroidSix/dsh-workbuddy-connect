@@ -86,13 +86,24 @@ function assistantToolCalls(
 }
 
 /**
- * One Harness tool-result message, in the 0.1.5 host contract: a user-role
- * message whose source is the tool seat, one result block per message.
+ * One Harness tool-result message.
+ *
+ * Since DSH 0.2.0 a tool result is a FIRST-CLASS `role: 'tool'` message whose
+ * `toolCallId` sits on the message itself (`ToolResultMessage` in dsh-llm).
+ * The 0.1.5–0.1.6 contract these cases were written against instead carried
+ * results as `tool-result` blocks *inside* a user-role message; `dsh-llm-pi-ai`
+ * no longer reads that shape, so an old-shaped result arrived at pi-ai as an
+ * ordinary user turn — which is exactly the orphan that produces pi-ai's
+ * synthetic `No result provided`. The pairing assertion below is unchanged:
+ * what matters is that the real text reaches the wire, in whatever carrier the
+ * host generation uses.
  */
 function toolResultMessage(id: string, text: string): Record<string, unknown> {
   return {
-    role: 'user',
-    content: [{ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text }], isError: false }],
+    role: 'tool',
+    toolCallId: id,
+    content: [{ type: 'text', text }],
+    isError: false,
     source: { kind: 'tool', callId: id },
   }
 }
