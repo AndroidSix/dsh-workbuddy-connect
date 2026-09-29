@@ -35,6 +35,7 @@ import type { WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
+import { legacySettingsOf } from './legacy-settings.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
@@ -867,14 +868,24 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['settings'], settingsCtx => {
     /*
      * DSH 0.1.7 removed the provider-service section API (`installSection`,
-     * `update`) without a replacement this plugin can drive. Calling it there
-     * would throw mid-inject, so the API is feature-detected: 0.1.5 and 0.1.6
-     * install both legacy sections as before, while a 0.1.7 host degrades to a
-     * settings-less provider — provider, picker, visibility, and the context
-     * rows all keep working; only the two settings sections and the
+     * `update`) without a replacement this plugin can drive, and DSH 0.2.0
+     * replaced the whole service with a Config-derived *forms* facade
+     * (`describe`/`update`/`mutate`, with no section installation at all).
+     * Calling the old API there would throw mid-inject, so it is
+     * feature-detected through the structural type above: 0.1.5 and 0.1.6
+     * install both legacy sections as before, while a 0.1.7+ or 0.2.0 host
+     * degrades to a settings-less provider — provider, picker, visibility, and
+     * the context rows all keep working; only the two settings sections and the
      * maximum-context preference are absent, and without an exception.
+     *
+     * The guard reads the API off a narrowed view rather than indexing the
+     * service directly, because `installSection` is not a member of the 0.2.0
+     * `SettingsForms` type at all: an `in`/`typeof` probe on that type is a
+     * compile error, and a cast to `any` would hide the very drift this
+     * detection exists to survive.
      */
-    if (typeof settingsCtx.settings.installSection !== 'function') {
+    const legacy = legacySettingsOf(settingsCtx.settings)
+    if (legacy === undefined) {
       ctx.logger.warn('dsh-workbuddy-connect: host settings service has no installSection API; per-variant settings and the maximum-context preference are unavailable')
       return
     }
@@ -902,16 +913,21 @@ export function apply(ctx: Context, config: Config): void {
         runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
       }
     }
-    settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
-      setSource(source) { sources.cn = source as () => Config; current = merged },
+    legacy.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
+      setSource(source: () => Config) { sources.cn = source; current = merged },
       onChange: repointStores,
     })
-    settingsCtx.settings.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
-      setSource(source) { sources.ai = source as () => Config; current = merged },
+    legacy.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
+      setSource(source: () => Config) { sources.ai = source; current = merged },
       onChange: repointStores,
     })
+    // Apply once after installing: `onChange` only fires on an edit, so a
+    // preference restored from a previous session would otherwise sit in the
+    // section unread until something changed it. Repointing here is what makes
+    // the stored maximum-context preference take effect on this boot.
+    repointStores()
     setMaximumContextWindow = async enabled => {
-      await settingsCtx.settings.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
+      await legacy.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
       return { state: 'updated' }
     }
   })
