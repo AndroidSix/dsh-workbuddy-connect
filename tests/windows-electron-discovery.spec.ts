@@ -335,14 +335,17 @@ describe('Windows candidate identity and failure semantics', () => {
     await expect(keyProvider.protectorKeyFor([KEY_ID])).rejects.toMatchObject({ reasonCode: 'electron-binary-not-found' })
   })
 
-  it('names the rejected candidates instead of claiming none were found (#66)', async () => {
-    const candidate = await windowsCandidate('WorkBuddy.exe', { appAsar: false })
+  it('reports rejected candidates by count, without echoing their local paths (#66)', async () => {
+    const candidate = await windowsCandidate('WorkBuddy.exe', { installRoot: join(root, 'deep', 'secret-user-dir') , appAsar: false })
     const keyProvider = provider(fakeWindowsTools(registryOutput([{ name: 'WorkBuddy', icon: `"${candidate},0"` }])))
     const error = await keyProvider.protectorKeyFor([KEY_ID]).catch((caught: unknown) => caught)
     expect(error).toMatchObject({ reasonCode: 'electron-binary-not-found' })
-    expect((error as Error).message).toContain(candidate)
+    expect((error as Error).message).toContain('found 1 WorkBuddy candidate')
     expect((error as Error).message).toContain('did not match the expected app layout')
     expect((error as Error).message).toContain('WORKBUDDY_ELECTRON_BIN')
+    // The reason reaches /status and doctor; local install paths must not.
+    expect((error as Error).message).not.toContain(candidate)
+    expect((error as Error).message).not.toContain('secret-user-dir')
   })
 
   it('keeps the plain not-found wording when the registry held no candidates at all', async () => {

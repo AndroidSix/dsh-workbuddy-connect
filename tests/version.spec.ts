@@ -51,3 +51,34 @@ describe('package version sync', () => {
     ).not.toHaveLength(0)
   })
 })
+
+describe('peer manifest pins the verified DSH cores', () => {
+  /**
+   * #69's lesson: a caret on a prerelease arm (`^0.2.0-rc.1`) silently
+   * admits every later rc of the same tuple — semver auto-extends support
+   * nobody verified. Since 0.7.0 the seven DSH service peers are pinned to
+   * exactly the cores this release was smoke-tested on; extending support
+   * means editing this list after a real run, not letting a caret do it.
+   * (pi-ai stays a dual-arm range on purpose: it matches whichever
+   * generation the verified host ships, so it follows the hosts, never
+   * leads them.)
+   */
+  const DSH_SERVICE_PEERS = [
+    '@deepseek-ai/dsh-atomic-write',
+    '@deepseek-ai/dsh-attachment',
+    '@deepseek-ai/dsh-home-paths',
+    '@deepseek-ai/dsh-host-webserver',
+    '@deepseek-ai/dsh-llm',
+    '@deepseek-ai/dsh-llm-pi-ai',
+    '@deepseek-ai/dsh-settings',
+  ] as const
+
+  it('each DSH service peer is an exact, caret-free list of verified cores', () => {
+    const pkg = JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { peerDependencies: Record<string, string> }
+    for (const name of DSH_SERVICE_PEERS) {
+      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.0-rc.1 || 0.2.0-rc.2')
+    }
+  })
+})

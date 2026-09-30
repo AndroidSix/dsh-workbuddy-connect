@@ -872,11 +872,14 @@ export function apply(ctx: Context, config: Config): void {
      * replaced the whole service with a Config-derived *forms* facade
      * (`describe`/`update`/`mutate`, with no section installation at all).
      * Calling the old API there would throw mid-inject, so it is
-     * feature-detected through the structural type above: 0.1.5 and 0.1.6
-     * install both legacy sections as before, while a 0.1.7+ or 0.2.0 host
-     * degrades to a settings-less provider — provider, picker, visibility, and
-     * the context rows all keep working; only the two settings sections and the
+     * feature-detected through the structural type above: a host carrying the
+     * section API installs both legacy sections, while a 0.2.0 host degrades
+     * to a settings-less provider — provider, picker, visibility, and the
+     * context rows all keep working; only the two settings sections and the
      * maximum-context preference are absent, and without an exception.
+     * (Since 0.7.0 the peers admit 0.2.0 cores only; the pre-0.2.0 branches
+     * are structural compatibility carried over from the 0.6.x line, not a
+     * current support promise.)
      *
      * The guard reads the API off a narrowed view rather than indexing the
      * service directly, because `installSection` is not a member of the 0.2.0

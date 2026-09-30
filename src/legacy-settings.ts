@@ -1,8 +1,7 @@
 /**
  * The DSH 0.1.2–0.1.6 settings-section API, detected at runtime.
  *
- * Three generations of the host settings service have now shipped, and this
- * plugin has to run on all of them:
+ * Three generations of the host settings service have shipped:
  *
  * - **0.1.5 / 0.1.6** — `ctx.settings.installSection(...)` installs a schema
  *   section per namespace and reports edits back to the plugin.
@@ -10,6 +9,11 @@
  * - **0.2.0** — the service was replaced by a Config-derived *forms* facade
  *   (`SettingsForms`: `describe`/`update`/`mutate`), which installs no
  *   sections at all and exposes only `.volatile()` fields of profile entries.
+ *
+ * Since 0.7.0 the peer range admits 0.2.0 cores only, so the 0.1.x branches
+ * are structural compatibility inherited from the 0.6.x line — not a support
+ * promise. The detection stays because it is what makes the guard honest on
+ * whatever host generation actually loads this code.
  *
  * `installSection` is therefore not merely renamed — it is absent from the
  * 0.2.0 type entirely. That makes detection the only option, but a naive

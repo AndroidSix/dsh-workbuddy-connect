@@ -932,11 +932,13 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
         // #66: "nothing was found" and "candidates were found but each failed
         // the layout check" are different diagnoses; the old single wording
         // claimed the former even when the latter was true, sending users
-        // hunting for an install that was right there.
+        // hunting for an install that was right there. The counts stay, the
+        // candidate paths deliberately do not — this text reaches /status and
+        // doctor, and local install paths are not for every loopback reader.
         const message = rejected.length === 0
           ? `no usable ${this.product.productName} Electron binary was found in the default location or Windows uninstall records;`
             + ` set ${this.product.envVar} to the app's Electron binary`
-          : `Windows uninstall records pointed at ${this.product.productName} installation${rejected.length > 1 ? 's' : ''} (${rejected.join(', ')}),`
+          : `Windows uninstall records found ${rejected.length} ${this.product.productName} candidate${rejected.length > 1 ? 's' : ''},`
             + ` but ${rejected.length > 1 ? 'none' : 'it'} did not match the expected app layout (the app's exe beside a version file and resources\\app.asar);`
             + ` set ${this.product.envVar} to the installed app's executable to use it`
         throw new WorkBuddyElectronPathError('electron-binary-not-found', message)
