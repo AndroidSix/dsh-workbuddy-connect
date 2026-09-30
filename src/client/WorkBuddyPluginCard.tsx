@@ -125,18 +125,17 @@ async function copyPrompt(text: string): Promise<boolean> {
  * request, and a re-check. Rendered only for the codes above.
  */
 function AssistBlock(
-  { t, variant, code, failureSummary, busy, onRecheck }: {
+  { t, variant, failureSummary, busy, onRecheck }: {
     t: (key: WorkBuddySettingsKey, params?: Record<string, unknown>) => string
     variant: WorkBuddyCardVariant
-    code: WorkBuddySignedOutReasonCode
     /**
      * The failure the copied prompt should carry: the live `status.reason`
      * when one is available (it holds the actual diagnosis — e.g. "#66:
      * candidates were found but failed the layout check" — where the generic
      * per-code summary would flatten back to "not found", the exact
      * misdirection the agent would inherit), the localized per-code summary
-     * otherwise. Content only; whether this block renders at all is still
-     * decided on the code alone.
+     * otherwise. Content only; whether this block renders at all is decided
+     * outside, on the code alone.
      */
     failureSummary: string
     busy: boolean
@@ -1307,7 +1306,6 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                     : <AssistBlock
                         t={t}
                         variant={variant}
-                        code={assistCode}
                         failureSummary={status.reason ?? t(assistSummaryKey(assistCode, variant))}
                         busy={busy}
                         onRecheck={() => { void manualRefresh() }}
