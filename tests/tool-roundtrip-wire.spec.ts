@@ -88,22 +88,20 @@ function assistantToolCalls(
 /**
  * One Harness tool-result message.
  *
- * Since DSH 0.2.0 a tool result is a FIRST-CLASS `role: 'tool'` message whose
- * `toolCallId` sits on the message itself (`ToolResultMessage` in dsh-llm).
- * The 0.1.5–0.1.6 contract these cases were written against instead carried
- * results as `tool-result` blocks *inside* a user-role message; `dsh-llm-pi-ai`
- * no longer reads that shape, so an old-shaped result arrived at pi-ai as an
- * ordinary user turn — which is exactly the orphan that produces pi-ai's
- * synthetic `No result provided`. The pairing assertion below is unchanged:
- * what matters is that the real text reaches the wire, in whatever carrier the
- * host generation uses.
+ * The host contract is UNCHANGED from 0.1.x through 0.2.0-rc.2: a tool result
+ * is a user-role message carrying `tool-result` blocks (dsh-llm's own
+ * `createToolResultMessage()` still builds exactly this shape). The
+ * first-class `role: 'tool'` + `tool_call_id` form is pi-ai's WIRE output to
+ * OpenAI-style endpoints — produced by `dsh-llm-pi-ai`'s conversion, asserted
+ * below — not the shape the host feeds into `stream()`. Feeding the wire shape
+ * in as input makes the conversion flatten the result into a plain user turn,
+ * orphaning the call id and producing exactly the synthetic filler this suite
+ * pins against (verified against dsh-llm / dsh-llm-pi-ai 0.2.0-rc.2).
  */
 function toolResultMessage(id: string, text: string): Record<string, unknown> {
   return {
-    role: 'tool',
-    toolCallId: id,
-    content: [{ type: 'text', text }],
-    isError: false,
+    role: 'user',
+    content: [{ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text }], isError: false }],
     source: { kind: 'tool', callId: id },
   }
 }
