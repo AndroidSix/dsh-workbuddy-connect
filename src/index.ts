@@ -921,11 +921,11 @@ export function apply(ctx: Context, config: Config): void {
       setSource(source: () => Config) { sources.ai = source; current = merged },
       onChange: repointStores,
     })
-    // Apply once after installing: `onChange` only fires on an edit, so a
-    // preference restored from a previous session would otherwise sit in the
-    // section unread until something changed it. Repointing here is what makes
-    // the stored maximum-context preference take effect on this boot.
-    repointStores()
+    // No install-time apply here: the real 0.1.5/0.1.6 `installSection` fires
+    // `onChange()` once synchronously at install (dsh-settings 0.1.6 calls it
+    // unconditionally right after `setSource`), so a restored preference
+    // already reaches `repointStores` through that first notification.
+    // Calling it again would only repeat the work.
     setMaximumContextWindow = async enabled => {
       await legacy.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
       return { state: 'updated' }

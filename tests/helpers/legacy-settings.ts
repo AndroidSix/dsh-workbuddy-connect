@@ -67,11 +67,13 @@ export class LegacySettingsService {
   /**
    * Install one schema section, reporting its live source and edits back.
    *
-   * A stored value for this namespace is merged in synchronously, which is
-   * what makes a preference survive the dispose-and-reboot cycle the restart
-   * specs assert on: the plugin installs the section and reads its value from
-   * the source it was handed in the same turn, so the restore has to have
-   * already happened by the time `installSection` returns.
+   * Mirrors the real 0.1.6 `installSection` exactly: `hooks.onChange()` fires
+   * once synchronously AT INSTALL TIME, not only on later edits — the real
+   * service calls it unconditionally right after `setSource` (dsh-settings
+   * 0.1.6, `installSection`). A stored value for the namespace is merged in
+   * before that first notification, so the plugin reads a restored preference
+   * through the same `onChange` it would see on a real host, and no
+   * install-time `repointStores()` call of its own is needed.
    */
   installSection<T extends Record<string, unknown>>(
     _ctx: Context,
@@ -89,6 +91,8 @@ export class LegacySettingsService {
     }
     this.sections.set(key, section)
     handlers.setSource(() => section.value as T)
+    // The real service fires onChange() unconditionally at install.
+    handlers.onChange()
   }
 
   /** Merge fields into one installed section, persist, and notify its owner. */

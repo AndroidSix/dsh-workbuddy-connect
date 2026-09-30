@@ -66,7 +66,7 @@ importers:
         specifier: 0.2.0-rc.2
         version: 0.2.0-rc.2(e1e1c125c2c1e7fbd3f6b2bc83710e84)
       '@deepseek-ai/schemastery':
-        specifier: ^3.18.4
+        specifier: ^3.18.2
         version: 3.18.4
       '@earendil-works/pi-ai':
         specifier: ^0.87.1
