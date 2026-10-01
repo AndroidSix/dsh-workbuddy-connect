@@ -121,7 +121,7 @@ describe('probeModel', () => {
       ['xhigh', ACCEPTED],
       ['max', ACCEPTED],
     ])
-    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL })
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL, region: 'global' })
     expect(outcome.validation).toBe('validating')
     expect(outcome.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
@@ -136,9 +136,35 @@ describe('probeModel', () => {
       ['xhigh', GLOBAL_REJECTED],
       ['max', ACCEPTED],
     ])
-    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL })
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL, region: 'global' })
     expect(outcome.validation).toBe('validating')
     expect(outcome.efforts).toEqual(['low', 'high', 'max'])
+  })
+
+  it('keeps the China endpoint degrading the global-only generic code to unknown', async () => {
+    // `model_param_invalid` was measured only on the global endpoint. The China
+    // endpoint was measured answering the specific `invalid_reasoning_effort`,
+    // so a generic code there must not be read as an effort rejection — the
+    // region split is what keeps each endpoint to its own vocabulary.
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, ACCEPTED],
+      [SENTINEL, GLOBAL_REJECTED],
+    ])
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL, region: 'cn' })
+    expect(outcome.validation).toBe('unknown')
+  })
+
+  it('keeps the China endpoint degrading the global-only generic code mid-sweep too', async () => {
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, ACCEPTED],
+      [SENTINEL, REJECTED],
+      ['low', ACCEPTED],
+      ['medium', GLOBAL_REJECTED],
+    ])
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL, region: 'cn' })
+    // A non-decisive answer mid-sweep: no partial set may leak out.
+    expect(outcome.validation).toBe('unknown')
+    expect(outcome.efforts).toEqual([])
   })
 
   it('still degrades a sibling code from the same envelope to unknown', async () => {
