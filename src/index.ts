@@ -425,6 +425,9 @@ function createVariantRuntime(
     catalog,
     credentials: store,
     client,
+    // The two endpoints answer a rejected effort with different codes; each
+    // runtime reads only the vocabulary measured on its own endpoint.
+    region: variant.id === CN_VARIANT.id ? 'cn' : 'global',
     consent: () => current().probeConsent === true,
     // Observations are per account: the service reads and writes its records
     // against this identity, so one account's detected levels never answer for
