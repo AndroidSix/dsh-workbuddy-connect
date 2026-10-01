@@ -169,12 +169,15 @@ describe('probeModel', () => {
 
   it('still degrades a sibling code from the same envelope to unknown', async () => {
     // `integer_below_min_value` arrives in the same 11133 envelope but names
-    // the `max_tokens` floor, so it says nothing about the effort value.
+    // the `max_tokens` floor, so it says nothing about the effort value. Run on
+    // the global region explicitly: that is where the envelope was measured
+    // and where the widened code set could otherwise mistake a sibling for an
+    // effort rejection.
     const table = new Map<string | undefined, ProbeAttempt>([
       [undefined, ACCEPTED],
       [SENTINEL, { status: 400, streamed: false, errorCode: 'integer_below_min_value' }],
     ])
-    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL })
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL, region: 'global' })
     expect(outcome.validation).toBe('unknown')
   })
 
