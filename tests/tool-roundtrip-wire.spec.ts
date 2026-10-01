@@ -88,20 +88,25 @@ function assistantToolCalls(
 /**
  * One Harness tool-result message.
  *
- * The host contract is UNCHANGED from 0.1.x through 0.2.0-rc.2: a tool result
- * is a user-role message carrying `tool-result` blocks (dsh-llm's own
- * `createToolResultMessage()` still builds exactly this shape). The
- * first-class `role: 'tool'` + `tool_call_id` form is pi-ai's WIRE output to
- * OpenAI-style endpoints — produced by `dsh-llm-pi-ai`'s conversion, asserted
- * below — not the shape the host feeds into `stream()`. Feeding the wire shape
- * in as input makes the conversion flatten the result into a plain user turn,
- * orphaning the call id and producing exactly the synthetic filler this suite
- * pins against (verified against dsh-llm / dsh-llm-pi-ai 0.2.0-rc.2).
+ * The host contract CHANGED with the 0.2.0 core: dsh-llm's
+ * `createToolResultMessage()` now builds a first-class tool-role message —
+ * `role: 'tool'` with a top-level `toolCallId` — and `dsh-llm-pi-ai`'s
+ * conversion answers exactly that (verified against the installed
+ * dsh-llm / dsh-llm-pi-ai 0.2.0-rc.2). The 0.1.x shape this helper used to
+ * feed — a user-role message carrying embedded `tool-result` blocks — is no
+ * longer normalized there; the conversion reads it as a plain user turn,
+ * orphaning the call id and producing the synthetic filler this suite pins
+ * against (this suite passed on that old shape only while a stale
+ * 0.1.6-alpha.2 install was satisfying the dev dependencies). The
+ * `tool_call_id` + `role: 'tool'` form on the WIRE remains pi-ai's output to
+ * OpenAI-style endpoints, asserted below.
  */
 function toolResultMessage(id: string, text: string): Record<string, unknown> {
   return {
-    role: 'user',
-    content: [{ type: 'tool-result', toolCallId: id, content: [{ type: 'text', text }], isError: false }],
+    role: 'tool',
+    toolCallId: id,
+    content: [{ type: 'text', text }],
+    isError: false,
     source: { kind: 'tool', callId: id },
   }
 }
