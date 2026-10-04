@@ -105,14 +105,45 @@ WorkBuddy 中模型的推理档位信息目前分散在上游接口与客户端�
   ```
 
 - 自 `0.6.0` 起，Models 设置页不再显示 WorkBuddy / WorkBuddy AI 的不可编辑卡片（两代核心行为一致）；模型选择器、`/model` 与对话调用不受影响。
-- DSH `0.2.0-rc.2` 的用户，安装最新版即可：`dsh plugin --profile web add dsh-workbuddy-connect`；还在 `0.2.0-rc.1` 的用户请停留在 `0.7.0`：`dsh plugin --profile web add dsh-workbuddy-connect@0.7.0`
+- DSH `0.2.0-rc.2` 的用户，安装 `0.7.1` 即可：`dsh plugin --profile web add dsh-workbuddy-connect@0.7.1`；还在 `0.2.0-rc.1` 的用户请停留在 `0.7.0`：`dsh plugin --profile web add dsh-workbuddy-connect@0.7.0`
 - 从 `0.6.x` 原地升级的 pnpm profile（曾手动装过 `pi-ai@0.85.1`）：升级到 `0.7.1+` 后 peer 范围不再接受 `0.85.1`，`pnpm install` 会把插件解析到宿主同代的 `0.87.1`；此前按 [#74](https://github.com/corrinehu/dsh-workbuddy-connect/issues/74) 临时加过的 `overrides: {'@earendil-works/pi-ai': 0.87.1}` 可以删掉了
 - 还在用 DSH `0.1.5` / `0.1.6` / `0.1.7` 的用户，请停留在 `0.6.5`：`dsh plugin --profile web add dsh-workbuddy-connect@0.6.5`
 - 还在用 DSH `0.1.2-rc.1` 的用户，请停留在 `0.3.1`：`dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
 - 还在用 DSH `0.1.1-rc.2` 的用户，请停留在 `0.2.6`：`dsh plugin --profile web add dsh-workbuddy-connect@0.2.6`
-- 桌面版按**内置核心**选择插件版本：内置 `0.1.x` 内核的桌面版（含 `2.0.7` 起的已发布正式版）用 `dsh-workbuddy-connect@0.6.5`；内置 `0.2.0` 内核的桌面版（预览 / nightly）用最新版；`2.0.5` 及更早（内置 `0.1.2-rc.1`）请继续使用 `0.3.1`
+- 桌面版按**内置核心**选择插件版本：内置 `0.1.x` 内核的桌面版（含 `2.0.7` 起的已发布正式版）用 `dsh-workbuddy-connect@0.6.5`；内置 `0.2.0-rc.2` 内核的桌面版用 `0.7.1`，内置 `0.2.0-rc.1` 内核的用 `0.7.0`（预览 / nightly）；`2.0.5` 及更早（内置 `0.1.2-rc.1`）请继续使用 `0.3.1`
 
-插件在三种 DSH 界面下均可运行：**Web**、**Desktop**、**TUI**。根据你使用的 profile 选对应命令安装。
+插件在三种 DSH 界面下均可运行：**Web**、**Desktop**、**TUI**。
+
+**推荐：把安装交给 Agent**。不用自己敲命令——把下面这段引导原样发给你的 AI 助手（DSH 内置 Agent、Claude Code、Codex、Cursor 等均可），它会按你的实际环境选对方式、装对版本并完成验证：
+
+```markdown
+请帮我安装 DSH（DeepSeek Harness）插件 dsh-workbuddy-connect，并在装完后验证。
+
+约束与信息：
+- 插件版本必须与 DSH 内核匹配。先确认内核版本——注意区分来源：Web / TUI 看独立 CLI 的
+  `dsh --version`；Desktop 桌面版必须确认其**内置 DSH 核心版本**（桌面 App 的「关于」页），
+  不要拿独立 CLI 的版本代替桌面 App 的内核做判断。
+  内核 `0.2.0-rc.2` → 装 `0.7.1`；内核 `0.2.0-rc.1` → 固定 `0.7.0`；内核 `0.1.5`–`0.1.7` → 固定 `0.6.5`；
+  更早内核见 https://github.com/corrinehu/dsh-workbuddy-connect README 的版本对应表。
+- 我使用的界面是：（发给 Agent 时注明 Web / Desktop 桌面版 / TUI 之一）
+- Web：执行 `dsh plugin --profile web add dsh-workbuddy-connect`（需要指定版本就加 `@版本号`）。
+- TUI：执行 `dsh plugin --profile dsh-tui add dsh-workbuddy-connect`；该 profile 需用 pnpm 11 安装。
+- Desktop 桌面版：`desktop` profile 由桌面 App 独占管理，任何 `dsh plugin --profile desktop ...`
+  命令都会被 CLI 直接拒绝（报 `profile "desktop" is managed exclusively by the Electron application`）。
+  首选做法：引导我在桌面 App 内置的插件管理界面安装。若改走文件方式，步骤必须完整：
+  ① 先确认桌面 App 实际使用的 profile 目录（默认 `~/.dsh/profiles/desktop`，Windows 为
+  `%USERPROFILE%\.dsh\profiles\desktop`，以实际为准）；② 让我完全退出桌面 App；
+  ③ 备份该目录下的 `package.json` 与 `pnpm-lock.yaml`；④ 在 dependencies 中加入
+  `"dsh-workbuddy-connect": "<版本>"`；⑤ 用与该 profile 匹配的 pnpm 在该目录执行安装
+  （优先使用桌面 App 自带的 pnpm；用错版本可能报 store 相关错误，按报错提示换版本重试）；
+  ⑥ 重启桌面 App。
+- 验证：重启对应界面后，模型选择器里应出现「WorkBuddy / WorkBuddy AI」分组——只装国内版或
+  只装国际版时，只需验证对应的那一组。分组与积分可见只说明插件加载、目录与账号读取正常；
+  请再从中选一个模型完成一次简短对话，能正常回复才算接入成功。
+```
+
+<details>
+<summary>手动安装（命令行，仅 Web / TUI）</summary>
 
 ```sh
 # Web（推荐，自带预构建产物）
@@ -122,19 +153,15 @@ dsh web
 # 或从 GitHub 源码安装 Web 版
 dsh plugin --profile web add github:corrinehu/dsh-workbuddy-connect
 dsh web
-```
 
-```sh
-# Desktop（DSH Desktop 桌面版）
-dsh plugin --profile desktop add dsh-workbuddy-connect
-dsh --profile desktop
-```
-
-```sh
 # TUI（终端界面）
 dsh plugin --profile dsh-tui add dsh-workbuddy-connect
 dsh --profile dsh-tui
 ```
+
+Desktop 桌面版不走命令行：`desktop` profile 由桌面 App 独占管理，CLI 一律拒绝（`profile "desktop" is managed exclusively by the Electron application`），请在桌面 App 内置的插件管理里安装。
+
+</details>
 
 > **TUI 用户请注意版本搭配**：终端界面插件 `@deepseek-harness-tui/dsh-tui` 需要 **`0.10.0-beta.5` 及以上**（更早的版本装了本插件会启动失败，报 `events is not iterable`）。请先用 TUI 自带的更新方式把壳升到 beta.5 及以上，再安装本插件；当前最新的是 beta 版，正式版发布后同样可用。
 
@@ -146,7 +173,7 @@ dsh --profile dsh-tui
 
 ## 命令行
 
-`dsh plugin --profile <web|desktop|dsh-tui> exec dsh-workbuddy-connect status`：登录状态与剩余积分（`--json` 输出机器可读格式；另有 `doctor` 诊断、`logout` 清理凭据）。
+`dsh plugin --profile <web|dsh-tui> exec dsh-workbuddy-connect status`：登录状态与剩余积分（`--json` 输出机器可读格式；另有 `doctor` 诊断、`logout` 清理凭据）。`desktop` profile 由桌面 App 独占管理，CLI（含 `exec`）一律不可用。
 
 默认操作国内版；加 `--provider workbuddy-ai` 操作国际版：
 
