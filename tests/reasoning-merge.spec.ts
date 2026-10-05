@@ -78,6 +78,13 @@ async function boot(options: {
   await vi.waitFor(() => {
     expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
   })
+  // Keep this second wait: registration alone does not make a model
+  // resolvable. The catalog starts hidden and is revealed only once the
+  // credential sweep adopts an identity, so dropping it makes all five cases
+  // in this file fail before they reach the logic under test.
+  await vi.waitFor(async () => {
+    expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
+  })
   return ctx
 }
 
