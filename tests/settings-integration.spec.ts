@@ -150,9 +150,14 @@ describe('WorkBuddy Host settings integration', () => {
     ctx.provide('settings', new MemorySettings())
     await ctx.plugin(WorkBuddy, {})
 
-    // Registration rides on the loopback shim's listening event.
-    await vi.waitFor(() => {
+    // Registration rides on the loopback shim's listening event — but
+    // registration alone does not populate the model list: each variant's
+    // catalog starts hidden and is revealed only once the credential sweep
+    // adopts an identity, so `listModels` still returns [] here and the
+    // fallback-roster assertions below see an empty list intermittently.
+    await vi.waitFor(async () => {
       expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
     })
     // No configurable-provider directory entry by design: the Models settings
     // page joins its rows on that registration, so omitting it keeps these
