@@ -77,11 +77,22 @@ describe('host heartbeat', () => {
   })
 
   it('detects a recycled PID as dead (registeredAt after this process started)', async () => {
-    // The current process started at some point in the past. If a stale
-    // heartbeat claims a `registeredAt` that is *older* than this process's
-    // own start time, the PID cannot be the original host — it has been
-    // recycled by an unrelated process. Even though `kill(pid, 0)` says the
-    // PID is alive, the age check must report dead.
+    // The process holding the recorded PID started at some fixed point. If a
+    // stale heartbeat claims a `registeredAt` that is *older* than that, the
+    // PID cannot be the original host — it has been recycled by an unrelated
+    // process. Even though `kill(pid, 0)` says the PID is alive, the age check
+    // must report dead.
+    //
+    // The start time is injected rather than measured: the rule under test is
+    // pure comparison over `startAtMs` and `registeredAt`. Calling the real
+    // `wmic` here made this case's duration the host's subprocess latency
+    // (measured 0.9-6.9s across runs, against a 5s timeout), so it failed
+    // whenever wmic happened to be slow — an environmental dependency, not a
+    // defect in the logic under test. The wmic output -> epoch parsing it used
+    // to lean on is covered by the `processStartTimeMs` cases below, which
+    // drive the same win32 branch with the same hoisted mock.
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    wmic.output = `CreationDate\n20260923104314.239907+480\n\n`
     const startAtMs = processStartTimeMs(process.pid)
     expect(startAtMs).toBeDefined()
 

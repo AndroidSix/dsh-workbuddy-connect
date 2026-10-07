@@ -150,9 +150,14 @@ describe('WorkBuddy Host settings integration', () => {
     ctx.provide('settings', new MemorySettings())
     await ctx.plugin(WorkBuddy, {})
 
-    // Registration rides on the loopback shim's listening event.
-    await vi.waitFor(() => {
+    // Registration rides on the loopback shim's listening event — but
+    // registration alone does not populate the model list: each variant's
+    // catalog starts hidden and is revealed only once the credential sweep
+    // adopts an identity, so `listModels` still returns [] here and the
+    // fallback-roster assertions below see an empty list intermittently.
+    await vi.waitFor(async () => {
       expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
     })
     // No configurable-provider directory entry by design: the Models settings
     // page joins its rows on that registration, so omitting it keeps these
@@ -497,9 +502,17 @@ describe('WorkBuddy Host settings integration', () => {
     ctx.provide('settings', new MemorySettings())
     ctx.provide('attachments', attachmentStore as never)
     await ctx.plugin(WorkBuddy, {})
-    await vi.waitFor(() => {
+    // Provider registration is NOT sufficient here: a variant's catalog starts
+    // hidden until the credential sweep adopts an identity, so `glm-5.3` is
+    // unresolvable right after registration and pi-ai's stream converts that
+    // into a terminal finish chunk — the `for await` below then ends with zero
+    // iterations and NO error, silently sending no request. Waiting for both
+    // variants' catalogs to be visible is what actually guarantees a request.
+    await vi.waitFor(async () => {
       expect(ctx.llm.listProviders().map(provider => provider.id))
         .toEqual(expect.arrayContaining(['workbuddy', 'workbuddy-ai']))
+      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
+      expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
     })
 
     const imageMessage = (offloaded = false) => ({
@@ -612,9 +625,13 @@ describe('WorkBuddy Host settings integration', () => {
     // The fs service is present — it just cannot map this host path.
     ctx.provide('fs', { processPathFromHostPath: () => undefined } as never)
     await ctx.plugin(WorkBuddy, {})
-    await vi.waitFor(() => {
+    // Registration is not enough — see the comment above: until the credential
+    // sweep reveals this variant's catalog, `glm-5.3` does not resolve and the
+    // stream ends with zero iterations and no error, sending nothing at all.
+    await vi.waitFor(async () => {
       expect(ctx.llm.listProviders().map(provider => provider.id))
         .toEqual(expect.arrayContaining(['workbuddy']))
+      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
     })
 
     for await (const _chunk of ctx.llm.stream({

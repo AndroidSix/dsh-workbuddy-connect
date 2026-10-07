@@ -159,13 +159,18 @@ describe('catalog lifecycle', () => {
     }))
 
     const ctx = await boot()
+    // Wait for the FETCH, not for the roster it feeds. `adoptIdentity` publishes
+    // the built-in fallback synchronously and only then starts the fetch
+    // (src/index.ts), so "the model list is non-empty" is satisfied a moment
+    // BEFORE any request is issued — waiting on it left `attempts` at 0
+    // intermittently. What the assertions below actually require is that a
+    // request happened, so wait for exactly that.
+    await vi.waitFor(() => {
+      expect(attempts).toBeGreaterThanOrEqual(1)
+    })
     // The failed fetch leaves the per-variant fallback serving: the group is
     // visible and usable rather than empty.
-    await vi.waitFor(async () => {
-      expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
-    })
     expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toContain('minimax-m3')
-    expect(attempts).toBeGreaterThanOrEqual(1)
 
     // Without the retry this stayed on the fallback list until a manual
     // refresh — a startup network blip should not require user action.
