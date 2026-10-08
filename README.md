@@ -107,7 +107,7 @@ WorkBuddy 中模型的推理档位信息目前分散在上游接口与客户端�
 - 自 `0.6.0` 起，Models 设置页不再显示 WorkBuddy / WorkBuddy AI 的不可编辑卡片（两代核心行为一致）；模型选择器、`/model` 与对话调用不受影响。
 - DSH `0.2.0-rc.2` 的用户，安装 `0.7.1` 即可：`dsh plugin --profile web add dsh-workbuddy-connect@0.7.1`；还在 `0.2.0-rc.1` 的用户请停留在 `0.7.0`：`dsh plugin --profile web add dsh-workbuddy-connect@0.7.0`
 - 从 `0.6.x` 原地升级的 pnpm profile（曾手动装过 `pi-ai@0.85.1`）：升级到 `0.7.1+` 后 peer 范围不再接受 `0.85.1`，`pnpm install` 会把插件解析到宿主同代的 `0.87.1`；此前按 [#74](https://github.com/corrinehu/dsh-workbuddy-connect/issues/74) 临时加过的 `overrides: {'@earendil-works/pi-ai': 0.87.1}` 可以删掉了
-- **不要把 profile 级的 `@earendil-works/pi-ai` 升到 1.x**：本插件与 `0.2.0-rc.2` 这一代 DSH 内核都要求 `^0.87.1`（见 `package.json` 的 `peerDependencies`）。插件通过 peer 使用 profile 顶层那一份 pi-ai，升到 1.x 会让插件加载到超出支持范围的版本，并在安装树里同时留下两份 pi-ai。**部分第三方插件管理器（如 `@linxin666/dsh-client-ui-plugin-manager`）的「检查更新」只看第三方包与 `dsh.engines.dsh`，不校验 peer 约束**，因此可能把 `pi-ai` 列为「可更新」——这个提示不能照做（见 [#86](https://github.com/corrinehu/dsh-workbuddy-connect/issues/86)）
+- **不要把 profile 级的 `@earendil-works/pi-ai` 升到 1.x**：本插件与 `0.2.0-rc.2` 这一代 DSH 内核都要求 `^0.87.1`（见 `package.json` 的 `peerDependencies`）。插件通过 peer 使用 profile 顶层那一份 pi-ai，升到 1.x 可能导致插件加载不兼容版本，并造成不同版本的 pi-ai 在安装树中并存。**部分第三方插件管理器（如 `@linxin666/dsh-client-ui-plugin-manager@0.4.5`）的「检查更新」只看第三方包与 `dsh.engines.dsh`，不校验 peer 约束**，因此可能把 `pi-ai` 列为「可更新」——这个提示不能照做（见 [#86](https://github.com/corrinehu/dsh-workbuddy-connect/issues/86)）
 - 还在用 DSH `0.1.5` / `0.1.6` / `0.1.7` 的用户，请停留在 `0.6.5`：`dsh plugin --profile web add dsh-workbuddy-connect@0.6.5`
 - 还在用 DSH `0.1.2-rc.1` 的用户，请停留在 `0.3.1`：`dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
 - 还在用 DSH `0.1.1-rc.2` 的用户，请停留在 `0.2.6`：`dsh plugin --profile web add dsh-workbuddy-connect@0.2.6`
