@@ -259,6 +259,145 @@ describe('WorkBuddyUpstreamClient.fetchCredits', () => {
     expect(credits.accounts[0]!.packageName).toBe('valid')
   })
 
+  /**
+   * Expiry coverage. The upstream has always sent `CycleEndTime`; these pin the
+   * parsing, the bucketing, and — importantly — the two states that must not be
+   * confused: "no end times reported" versus "nothing expiring".
+   */
+  describe('package expiry', () => {
+    /** A local-time stamp the same shape the upstream sends. */
+    const at = (offsetMs: number): string => {
+      const d = new Date(Date.now() + offsetMs)
+      const p = (n: number): string => String(n).padStart(2, '0')
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+    }
+    const HOUR = 3600 * 1000
+    const DAY = 24 * HOUR
+
+    it('reads CycleEndTime into endTimeMs', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'pkg', CycleCapacitySize: 100, CycleCapacityRemain: 40, CycleEndTime: at(2 * DAY) },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      const end = credits.accounts[0]!.endTimeMs
+      expect(end).toBeTypeOf('number')
+      // Same wall-clock moment, to the second.
+      expect(Math.abs((end ?? 0) - (Date.now() + 2 * DAY))).toBeLessThan(2000)
+    })
+
+    it('omits endTimeMs for an absent or malformed stamp', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'no-field', CycleCapacitySize: 10, CycleCapacityRemain: 5 },
+        { PackageName: 'empty', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '' },
+        { PackageName: 'garbage', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: 'whenever' },
+        { PackageName: 'numeric', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: 1791678478000 },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      // A malformed stamp must read as "unknown", never as "never expires".
+      for (const account of credits.accounts) expect(account.endTimeMs).toBeUndefined()
+    })
+
+    it('reports no expiry summary when the upstream sent no end times', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'pkg', CycleCapacitySize: 100, CycleCapacityRemain: 40 },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      // Absence of data is not evidence of safety, so the field stays unset.
+      expect(credits.expiry).toBeUndefined()
+    })
+
+    it('omits endTimeMs for a stamp that is not a real calendar moment', async () => {
+      // `Date` rolls overflowing fields forward instead of rejecting them, so a
+      // shape-valid but impossible stamp would otherwise be read as a confident
+      // nearby date. Every one of these must come back as "unknown".
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'non-leap', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-02-29 10:00:00' },
+        { PackageName: 'feb-30', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-02-30 10:00:00' },
+        { PackageName: 'month-13', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-13-01 10:00:00' },
+        { PackageName: 'month-00', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-00-15 10:00:00' },
+        { PackageName: 'apr-31', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-04-31 10:00:00' },
+        { PackageName: 'hour-25', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-01-01 25:00:00' },
+        { PackageName: 'minute-60', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-01-01 10:60:00' },
+        { PackageName: 'second-99', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2026-01-01 10:00:99' },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      for (const account of credits.accounts) expect(account.endTimeMs).toBeUndefined()
+      // With every stamp rejected, there is no expiry data to summarise.
+      expect(credits.expiry).toBeUndefined()
+    })
+
+    it('still reads a real leap day', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'leap', CycleCapacitySize: 10, CycleCapacityRemain: 5, CycleEndTime: '2028-02-29 10:00:00' },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      const end = credits.accounts[0]!.endTimeMs
+      expect(end).toBeTypeOf('number')
+      const parsed = new Date(end!)
+      expect(parsed.getFullYear()).toBe(2028)
+      expect(parsed.getMonth()).toBe(1)
+      expect(parsed.getDate()).toBe(29)
+    })
+
+    it('buckets credit by horizon and only counts positive balances', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'soon', CycleCapacitySize: 100, CycleCapacityRemain: 10, CycleEndTime: at(2 * HOUR) },
+        { PackageName: 'mid', CycleCapacitySize: 100, CycleCapacityRemain: 20, CycleEndTime: at(2 * DAY) },
+        { PackageName: 'week', CycleCapacitySize: 100, CycleCapacityRemain: 30, CycleEndTime: at(5 * DAY) },
+        { PackageName: 'later', CycleCapacitySize: 100, CycleCapacityRemain: 40, CycleEndTime: at(20 * DAY) },
+        // Zero balance inside the window must not inflate the at-risk number.
+        { PackageName: 'spent', CycleCapacitySize: 100, CycleCapacityRemain: 0, CycleEndTime: at(1 * HOUR) },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      const expiry = credits.expiry
+      expect(expiry).toBeDefined()
+      expect(expiry!.within24h).toMatchObject({ total: 10, packages: 1 })
+      expect(expiry!.within3d).toMatchObject({ total: 30, packages: 2 })
+      expect(expiry!.within7d).toMatchObject({ total: 60, packages: 3 })
+      // The 20-day package is outside every window and must not be counted.
+      expect(credits.total).toBe(100)
+    })
+
+    it('keeps a lapsed package out of every future horizon', async () => {
+      // The personal billing query filters `Status: [0, 3]` from the current time
+      // forward, so a lapsed package should not arrive here at all. This pins the
+      // guard that keeps one from being read as "expiring within 24 hours" if it
+      // ever did: `end - now` is negative, so a naive forward test would match
+      // every horizon at once.
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'lapsed', CycleCapacitySize: 100, CycleCapacityRemain: 25, CycleEndTime: at(-1 * HOUR) },
+        { PackageName: 'live', CycleCapacitySize: 100, CycleCapacityRemain: 5, CycleEndTime: at(30 * DAY) },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      expect(credits.expiry!.within24h).toMatchObject({ total: 0, packages: 0 })
+      expect(credits.expiry!.within3d).toMatchObject({ total: 0, packages: 0 })
+      expect(credits.expiry!.within7d).toMatchObject({ total: 0, packages: 0 })
+      // Its balance is still part of the raw total: this PR does not change how
+      // `total` is summed, only what the card chooses to warn about.
+      expect(credits.total).toBe(30)
+    })
+
+    it('names the soonest expiry for each bucket', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(billingEnvelope([
+        { PackageName: 'b', CycleCapacitySize: 10, CycleCapacityRemain: 1, CycleEndTime: at(3 * DAY) },
+        { PackageName: 'a', CycleCapacitySize: 10, CycleCapacityRemain: 1, CycleEndTime: at(4 * DAY) },
+      ]))))
+
+      const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+      const earliest = credits.expiry!.within7d.earliestEndTimeMs
+      expect(earliest).toBeTypeOf('number')
+      // 'b' expires first and must be the one named.
+      expect(Math.abs((earliest ?? 0) - (Date.now() + 3 * DAY))).toBeLessThan(2000)
+    })
+  })
+
   it('throws when the upstream business code is non-zero', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(
       JSON.stringify({ code: 1, msg: 'billing error' }),
@@ -622,9 +761,9 @@ describe('WorkBuddyUpstreamClient.fetchModels badge merge', () => {
 describe('chatStream wire effort by region (issue #49)', () => {
   /**
    * THE REGION-SPLIT ACCEPTANCE: judged on the request that actually leaves
-   * `chatStream`, not on any intermediate helper. The CN variant must keep its
-   * existing wire (the adapter's own `off` spelling included); the
-   * international variant must drop exactly that spelling and nothing else.
+   * `chatStream`, not on any intermediate helper. Both regions drop the
+   * adapter's own `off` spelling and nothing else — the CN half used to be
+   * exempt by an explicit scope decision, which #87 invalidated.
    */
   const AI_CREDENTIAL: WorkBuddyCredential = { ...CREDENTIAL, domain: 'www.workbuddy.ai' }
 
@@ -645,9 +784,30 @@ describe('chatStream wire effort by region (issue #49)', () => {
     return calls[0]?.body === undefined ? undefined : (calls[0].body as Record<string, unknown>)['reasoning_effort']
   }
 
-  it('CN keeps the `off` spelling; international drops it', async () => {
-    expect(await wireEffort(CREDENTIAL, 'off')).toBe('off')
+  it('drops the `off` spelling in both regions (issue #49 for global, #87 for CN)', async () => {
+    // CN used to pass `off` through by an explicit scope decision. #87 measured
+    // that endpoint rejecting it on `deepseek-v4.1-flash` (400 / 11150), which
+    // invalidated the premise, so the strip is no longer region-scoped.
+    expect(await wireEffort(CREDENTIAL, 'off')).toBeUndefined()
     expect(await wireEffort(AI_CREDENTIAL, 'off')).toBeUndefined()
+  })
+
+  it('omits the field entirely for `off` rather than substituting another spelling', async () => {
+    // `none` is the tempting substitute and is *not* safe: accepted by the
+    // GPT-5.6 family and GLM, rejected by `gpt-6-astra` (#49).
+    const captured: Record<string, unknown>[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return fakeResponse('')
+    }))
+    const result = await new WorkBuddyUpstreamClient().chatStream(CREDENTIAL, JSON.stringify({
+      model: 'probe-model',
+      messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: 'hi' }],
+      reasoning_effort: 'off',
+    }))
+    expect(result.ok).toBe(true)
+    expect('reasoning_effort' in (captured[0] ?? {})).toBe(false)
+    expect(captured[0]?.['model']).toBe('probe-model')
   })
 
   it('declared spellings and `none` are untouched in both regions', async () => {

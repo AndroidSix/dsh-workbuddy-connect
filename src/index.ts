@@ -28,6 +28,7 @@ import { createWorkBuddyShim } from './shim.ts'
 import { WorkBuddyProbeService } from './probe-service.ts'
 import { newestFirst, WorkBuddyProbeStore, workbuddyProbePath } from './probe-store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
+import { piAiVersionWarning } from './pi-ai-guard.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
 import { registerWorkBuddyUpdateRoute } from './update-route.ts'
 import { createProbeKey, registerWorkBuddyProbeRoute } from './probe-route.ts'
@@ -119,6 +120,7 @@ export {
   normalizeCredits,
   parseModelCatalog,
   prepareChatBody,
+  prepareCnChatBody,
   prepareInternationalChatBody,
   regionOf,
   WorkBuddyUpstreamClient,
@@ -544,6 +546,10 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
     const workbuddy = createWorkBuddyAdapter({
       providerId: variant.id,
       displayName: variant.displayName,
+      // From the variant descriptor, never inferred: it selects the CN-only
+      // `onlyReasoning` rule that keeps an always-failing `off` out of the
+      // picker (#87).
+      region: variant.region,
       shim,
       store,
       catalog,
@@ -612,6 +618,12 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
  * working without re-registering the provider.
  */
 export function apply(ctx: Context, config: Config): void {
+  // Report a shadowed pi-ai copy once, at load. See pi-ai-guard.ts: the plugin
+  // still runs, but a mismatched generation otherwise surfaces only as an
+  // opaque PI_AI_ERROR on the first request (issue #92).
+  const piAiWarning = piAiVersionWarning()
+  if (piAiWarning !== undefined) ctx.logger.warn(`dsh-workbuddy-connect: ${piAiWarning}`)
+
   // Live configuration source: starts as the applied config and is replaced by
   // the settings section's source once one is installed, so edits reach the
   // probe consent gate without a restart.

@@ -7,6 +7,7 @@
  * @module dsh-workbuddy-connect/upstream
  */
 
+import { randomUUID } from 'node:crypto'
 import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
 import { chatUserAgent, fallbackChatIdentity, resolveChatIdentity, type ChatIdentity } from './client-identity.ts'
 import type { WorkBuddyCredential } from './auth.ts'
@@ -107,6 +108,51 @@ export interface WorkBuddyCreditAccount {
   remain: number
   size: number
   unlimited?: true
+  /**
+   * When the package's own cycle ends, in epoch milliseconds.
+   *
+   * The upstream has always sent this (`CycleEndTime`, a zone-less
+   * `YYYY-MM-DD HH:mm:ss` string) and the query itself already filters on
+   * `PackageEndTimeRange`, but the field used to be dropped here — so a card
+   * could show "500 credit" for a package expiring in an hour with nothing to
+   * distinguish it from one expiring next month. Absent when the upstream omits
+   * or malforms it, which must never read as "no expiry".
+   *
+   * The zone the upstream means is **not established**: reading the string as
+   * the running machine's local time follows the official desktop client (see
+   * {@link parseCycleEndTime}), and is not a claim about the account's zone.
+   */
+  endTimeMs?: number
+}
+
+/** Credit whose package expires within a horizon the user should act on. */
+export interface WorkBuddyExpiringCredits {
+  /** Sum of {@link WorkBuddyCreditAccount.remain} over the window. */
+  total: number
+  /** How many packages contribute to {@link total}. */
+  packages: number
+  /** The soonest `endTimeMs` among them. */
+  earliestEndTimeMs?: number
+}
+
+/**
+ * Credit at risk, bucketed by how soon it lapses.
+ *
+ * Thresholds are calendar-ish (24h / 3d / 7d) rather than "this month": a package
+ * expiring at 08:00 tomorrow is not helped by a monthly average, and the upstream
+ * genuinely staggers expiries per package.
+ *
+ * Only *future* horizons are reported. An already-lapsed package is deliberately
+ * **not** summarised here: the personal billing query this feeds filters
+ * `Status: [0, 3]` (`valid` + `usedUp`) from the current time forward, while the
+ * upstream marks a lapsed package `Status: 2` (`expired`) — a status this query
+ * never returns. Historical expiry would need its own query, which is out of
+ * scope.
+ */
+export interface WorkBuddyCreditExpiry {
+  within24h: WorkBuddyExpiringCredits
+  within3d: WorkBuddyExpiringCredits
+  within7d: WorkBuddyExpiringCredits
 }
 
 /** Aggregated credit answer for one credential. */
@@ -125,6 +171,13 @@ export interface WorkBuddyCredits {
    */
   unlimited?: true
   cycleResetTime?: string
+  /**
+   * Credit lapsing soon, so a card can warn instead of only reporting a total.
+   *
+   * Absent when no account carried a usable end time — the plugin must not
+   * claim "nothing expires soon" on the strength of data it never received.
+   */
+  expiry?: WorkBuddyCreditExpiry
 }
 
 /** Token refresh answer; fields the upstream omits stay absent. */
@@ -382,11 +435,40 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
 }
 
 /**
+ * The conversation-channel trio the chat endpoints require.
+ *
+ * Since 2026-10-16 `www.workbuddy.ai` answers any `/v2/chat/completions`
+ * request that omits all three `X-Conversation-*` headers with `400` /
+ * `code 11128` / `msg: "conversation id missing"`, whose `displayMsg.zh` is
+ * 「请求被拦截，请重新发送」 (issue #139). The official desktop client sends
+ * the trio on chat and speech alike — read out of `resources/app.asar`, where
+ * the names are `X-Conversation-ID`, `X-Conversation-Request-ID` and
+ * `X-Conversation-Message-ID`.
+ *
+ * A fresh UUID per request is enough, and is what the wire measurement
+ * supports: the upstream keeps no history keyed by the id (two calls sharing
+ * one id, the second carrying only `system` + `user`, still answered "I don't
+ * know"), so the trio marks the channel rather than carrying conversation
+ * state. Fresh ids also keep concurrent sub-agents off one shared
+ * conversation. The CN gateway was measured accepting the same trio (200 with
+ * and without), so both regions carry it and the two paths cannot drift.
+ */
+function conversationHeaders(): Record<string, string> {
+  return {
+    'X-Conversation-ID': randomUUID(),
+    'X-Conversation-Request-ID': randomUUID(),
+    'X-Conversation-Message-ID': randomUUID(),
+  }
+}
+
+/**
  * Chat request headers, including the X-No-* conventions the official CLI uses.
  *
  * `userAgent` and `clientVersion` carry the same resolved desktop identity for
  * chat and probe requests. Refresh shares `commonHeaders` but never this
- * override, so the two paths cannot drift into each other.
+ * override, so the two paths cannot drift into each other. The
+ * `X-Conversation-*` trio rides along too — see {@link conversationHeaders} —
+ * because the international gateway rejects a chat that omits it.
  */
 function chatHeaders(credential: WorkBuddyCredential, userAgent: string, clientVersion: string): Record<string, string> {
   const headers: Record<string, string> = {
@@ -403,6 +485,7 @@ function chatHeaders(credential: WorkBuddyCredential, userAgent: string, clientV
     'X-IDE-Name': 'WorkBuddy',
     'X-IDE-Version': clientVersion,
     'X-Product': 'SaaS',
+    ...conversationHeaders(),
   }
   return headers
 }
@@ -431,6 +514,29 @@ function billingHeaders(credential: WorkBuddyCredential): Record<string, string>
   if (credential.enterpriseId !== undefined && credential.enterpriseId !== '') {
     headers['X-Enterprise-Id'] = credential.enterpriseId
     headers['X-Tenant-Id'] = credential.enterpriseId
+  }
+  if (credential.domain !== '') headers['X-Domain'] = credential.domain
+  return headers
+}
+
+/**
+ * Account-identity headers for the CN catalog requests (`/v3/config` and the
+ * console badge read). The gateway also splits `/v3/config` by account
+ * identity: an enterprise account without this pair is silently answered with
+ * the personal roster (issue #123 — 18 vs 19 models, FlashX missing), and the
+ * pair is all-or-nothing there: `X-Enterprise-Id` alone is rejected outright
+ * while `X-User-Id` alone selects nothing. So the block is emitted only when
+ * both parts exist, and personal accounts keep the bare headers their roster
+ * was already correct under. `X-Tenant-Id`/`X-Domain` ride along in the
+ * spelling `billingHeaders` already proved the gateway accepts.
+ */
+function identityHeaders(credential: WorkBuddyCredential): Record<string, string> {
+  if (credential.uid === '') return {}
+  if (credential.enterpriseId === undefined || credential.enterpriseId === '') return {}
+  const headers: Record<string, string> = {
+    'X-User-Id': credential.uid,
+    'X-Enterprise-Id': credential.enterpriseId,
+    'X-Tenant-Id': credential.enterpriseId,
   }
   if (credential.domain !== '') headers['X-Domain'] = credential.domain
   return headers
@@ -580,6 +686,113 @@ export interface WorkBuddyUpstreamClientOptions {
 }
 
 /**
+ * Parse the billing response's `CycleEndTime` into epoch milliseconds.
+ *
+ * The upstream sends a zone-less timestamp (`YYYY-MM-DD HH:mm:ss`). This reads it
+ * as the running machine's local time, which is what the official desktop client
+ * does — it feeds the same field straight to `new Date(value).getTime()`. That
+ * makes the plugin agree with the app on the same machine; it is **not** evidence
+ * of which zone the server or the account uses, which remains unestablished.
+ *
+ * A naive read does mean a machine in a different zone than the account's gets a
+ * shifted instant. That is accepted here rather than guessed at: inventing an
+ * offset would be asserting a zone nobody has verified.
+ *
+ * @returns Epoch milliseconds, or undefined when absent, malformed, or not a real
+ * calendar moment (see the round-trip check below).
+ */
+function parseCycleEndTime(value: unknown): number | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/u.exec(value.trim())
+  if (match === null) return undefined
+  const [, y, mo, d, h, mi, s] = match
+  const parts = [y, mo, d, h, mi, s].map(Number)
+  const [year, month, day, hour, minute, second] = parts as
+    [number, number, number, number, number, number]
+  const date = new Date(year, month - 1, day, hour, minute, second)
+  const parsed = date.getTime()
+  if (!Number.isFinite(parsed)) return undefined
+  // `Date` rolls overflowing fields forward instead of rejecting them: Feb 30
+  // becomes Mar 2, month 13 becomes January of the next year, hour 25 becomes
+  // 01:00 the next day. The shape regex above cannot catch that, so compare every
+  // field back to what was asked for. A mismatch means the stamp is not a real
+  // moment, and must read as "unknown" rather than as a confident nearby date.
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day
+    || date.getHours() !== hour || date.getMinutes() !== minute || date.getSeconds() !== second) {
+    return undefined
+  }
+  return parsed
+}
+
+/** Empty bucket, used whenever no account qualifies. */
+const NO_EXPIRING_CREDIT: WorkBuddyExpiringCredits = { total: 0, packages: 0 }
+
+/**
+ * Sum the credit lapsing within `horizonMs` of `nowMs`.
+ *
+ * Only positive balances count: a package with nothing left is not a loss, and
+ * including it would make every long-lived account look permanently at risk.
+ * Only *future* expiries count too — a package already past its end time would
+ * otherwise satisfy every forward horizon at once (`end - now` is negative,
+ * hence "within 24 hours"), making a long-dead package look permanently
+ * imminent. See {@link WorkBuddyCreditExpiry} for why the past is not reported.
+ */
+function expiringWithin(
+  accounts: readonly WorkBuddyCreditAccount[],
+  nowMs: number,
+  horizonMs: number,
+): WorkBuddyExpiringCredits {
+  return sumExpiring(accounts, (end) => end > nowMs && end - nowMs <= horizonMs)
+}
+
+/** Shared accumulator over accounts whose end time passes `matches`. */
+function sumExpiring(
+  accounts: readonly WorkBuddyCreditAccount[],
+  matches: (endTimeMs: number) => boolean,
+): WorkBuddyExpiringCredits {
+  let total = 0
+  let packages = 0
+  let earliestEndTimeMs: number | undefined
+  for (const account of accounts) {
+    const end = account.endTimeMs
+    if (end === undefined || account.remain <= 0) continue
+    if (!matches(end)) continue
+    total += account.remain
+    packages += 1
+    if (earliestEndTimeMs === undefined || end < earliestEndTimeMs) earliestEndTimeMs = end
+  }
+  if (packages === 0) return NO_EXPIRING_CREDIT
+  return {
+    total,
+    packages,
+    ...earliestEndTimeMs === undefined ? {} : { earliestEndTimeMs },
+  }
+}
+
+/**
+ * Bucket an account's credit by how soon it lapses.
+ *
+ * Returns undefined when no account carried a usable end time, so a caller can
+ * tell "nothing is expiring" apart from "we never learned when anything
+ * expires" — the second must not render as reassurance.
+ */
+function summariseExpiry(
+  accounts: readonly WorkBuddyCreditAccount[],
+  nowMs: number,
+): { expiry?: WorkBuddyCreditExpiry } {
+  if (!accounts.some((account) => account.endTimeMs !== undefined)) return {}
+  const HOUR = 3600 * 1000
+  const DAY = 24 * HOUR
+  return {
+    expiry: {
+      within24h: expiringWithin(accounts, nowMs, DAY),
+      within3d: expiringWithin(accounts, nowMs, 3 * DAY),
+      within7d: expiringWithin(accounts, nowMs, 7 * DAY),
+    },
+  }
+}
+
+/**
  * Upstream HTTP client. One instance serves the whole plugin; requests take
  * the credential explicitly so token refreshes apply on the next call.
  *
@@ -628,7 +841,7 @@ export class WorkBuddyUpstreamClient {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
         headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: region === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
+        body: region === 'global' ? prepareInternationalChatBody(bodyJson) : prepareCnChatBody(bodyJson),
         ...signal === undefined ? {} : { signal },
       })
     } catch (error: unknown) {
@@ -684,6 +897,13 @@ export class WorkBuddyUpstreamClient {
    * advertises is exactly the one its own requests can use. The international
    * variant has no CLI identity, so it keeps the App-shaped UA.
    *
+   * The same split has an account-identity axis (issue #123): an enterprise
+   * account must also present `X-User-Id` + `X-Enterprise-Id`, or the gateway
+   * answers with the personal roster. CN sends that pair via
+   * {@link identityHeaders} whenever the credential carries both halves; the
+   * international gateway's split was never measured against account headers,
+   * so it keeps its documented shape.
+   *
    * Membership is the `cli` roster intersected with the usable rows (see
    * {@link parseModelCatalog}); the promo badges the product document does
    * not carry are merged in from a best-effort console read — see
@@ -705,7 +925,7 @@ export class WorkBuddyUpstreamClient {
         Accept: 'application/json',
         Origin: originReferer(credential),
         Referer: `${originReferer(credential)}/`,
-        ...international ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' } : {},
+        ...international ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' } : identityHeaders(credential),
         'User-Agent': appVersion === undefined ? CLIENT_UA : appUserAgent(appVersion.version),
       },
       signal: signal === undefined
@@ -762,6 +982,7 @@ export class WorkBuddyUpstreamClient {
           Accept: 'application/json',
           Origin: originReferer(credential),
           Referer: `${originReferer(credential)}/`,
+          ...identityHeaders(credential),
           'User-Agent': CLIENT_UA,
         },
         signal: signal === undefined
@@ -862,13 +1083,15 @@ export class WorkBuddyUpstreamClient {
       else remain = capacityRemain
       if (remain < 0) remain = 0
       total += remain
+      const endTimeMs = parseCycleEndTime(account['CycleEndTime'])
       accounts.push({
         packageName: typeof account['PackageName'] === 'string' ? account['PackageName'] : '(unnamed)',
         remain,
         size: size > 0 ? size : numberField('CapacitySize'),
+        ...endTimeMs === undefined ? {} : { endTimeMs },
       })
     }
-    return { total, accounts }
+    return { total, accounts, ...summariseExpiry(accounts, now.getTime()) }
   }
 
   /**
@@ -1279,6 +1502,34 @@ export function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now = D
  * JSON object is returned unchanged, exactly as {@link prepareChatBody} does,
  * so this is safe to run over an already-prepared-or-not body.
  */
+/**
+ * Prepare a body for the **CN** endpoint.
+ *
+ * Until #87 the CN wire was the caller's body verbatim. The only difference
+ * now is the shared {@link dropUnsupportedEffort} strip, whose region scope was
+ * lifted once measurements showed this endpoint rejects `off` too.
+ *
+ * Deliberately **not** routed through {@link prepareChatBody}: the shim already
+ * applies it before handing the body to {@link WorkBuddyUpstreamClient.chatStream},
+ * and re-running it would be a second `stream`/`developer`/`tool_choice`
+ * normalisation of an already-normalised body. Only the strip belongs here.
+ *
+ * A body that is not a JSON object is returned unchanged, so this is safe to
+ * run over an already-prepared-or-not body.
+ */
+export function prepareCnChatBody(source: string): string {
+  let body: unknown
+  try {
+    body = JSON.parse(source)
+  } catch {
+    // Not JSON: nothing to strip, and the upstream will reject it anyway.
+    return source
+  }
+  if (!isObject(body)) return source
+  dropUnsupportedEffort(body)
+  return JSON.stringify(body)
+}
+
 export function prepareInternationalChatBody(source: string): string {
   const prepared = prepareChatBody(source)
   let body: unknown
@@ -1289,10 +1540,8 @@ export function prepareInternationalChatBody(source: string): string {
     return prepared
   }
   if (!isObject(body)) return prepared
-  // Region-scoped strip, deliberately *after* the shared `prepareChatBody`:
-  // the CN variant keeps its existing request behaviour — `reasoning_effort`
-  // is passed through verbatim there, including the adapter's own `off`
-  // spelling. See `dropUnsupportedEffort` below for why only this region drops it.
+  // Shared with the CN path since #87: both endpoints reject the adapter's own
+  // `off` spelling, so the strip is no longer region-scoped.
   dropUnsupportedEffort(body)
   const messages = body['messages']
   if (!Array.isArray(messages)) return JSON.stringify(body)
@@ -1304,25 +1553,34 @@ export function prepareInternationalChatBody(source: string): string {
 }
 
 /**
- * Remove the adapter's own `off` effort spelling from the **international** wire.
+ * Remove the adapter's own `off` effort spelling from the wire, on every region.
  *
  * `thinkingLevelMap.off` is pinned to the literal `'off'` for models that
  * declare `canDisableThinking`, so that the level stays selectable. pi-ai
- * sends that value for any request carrying no explicit level, and the
- * international endpoint rejects it on the GPT family with HTTP 400 `11133` /
- * `extError.param === 'reasoning.effort'` (issue #49). Omission is the only
- * form measured good on every such model; a literal `'none'` is *not* a safe
- * substitute — accepted by the GPT-5.6 family and GLM, rejected by
- * `gpt-6-astra`.
+ * sends that value for any request carrying no explicit level — which is why
+ * this covers **Default and Off alike**: the two produce the same body, so a
+ * fix that only removed the menu entry would leave Default failing.
  *
- * Consequences, stated honestly: the international picker still offers Off,
- * but selecting it now means "the field is omitted" — the model's actual
- * behaviour is decided upstream and is *not* guaranteed to disable thinking
- * or to match the catalog's `defaultEffort`. Declared spellings
- * (`low`/`medium`/`high`/`xhigh`/`max`) and an explicit `none` pass through
- * untouched. The CN variant is deliberately unaffected: its endpoint has
- * accepted this spelling in every measurement so far, and keeping its wire
- * unchanged is a scope decision, not a claim about that endpoint's future.
+ * Both endpoints reject it, which is why this is no longer region-scoped
+ * (#87): the international GPT family answers HTTP 400 `11133` /
+ * `extError.param === 'reasoning.effort'` (issue #49), and the CN endpoint
+ * rejects it on models that declare `onlyReasoning` — measured on
+ * `deepseek-v4.1-flash` with 400 / `11150`, while `low`/`high`/`max` pass
+ * (issue #87). Omission is the only form measured good on every such model; a
+ * literal `'none'` is *not* a safe substitute — accepted by the GPT-5.6 family
+ * and GLM, rejected by `gpt-6-astra`.
+ *
+ * Consequences, stated honestly: the picker still offers Off for models where
+ * the upstream declares `canDisableThinking`, but selecting it now means "the
+ * field is omitted" — the model's actual behaviour is decided upstream and is
+ * *not* guaranteed to disable thinking or to match the catalog's
+ * `defaultEffort`. Declared spellings (`low`/`medium`/`high`/`xhigh`/`max`)
+ * and an explicit `none` pass through untouched.
+ *
+ * The CN strip replaces a scope decision whose premise did not hold: the
+ * earlier note here said that endpoint "has accepted this spelling in every
+ * measurement so far". Measurements since (#87) show it rejects `off` on
+ * validating models — the earlier runs had simply not hit one.
  */
 function dropUnsupportedEffort(obj: Record<string, unknown>): void {
   if (obj['reasoning_effort'] === 'off') delete obj['reasoning_effort']
